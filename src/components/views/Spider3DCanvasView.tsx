@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { isPictureElementId, pictureElementMime, type PictureElementId } from '../../lib/zx-core/pictureElements'
+import { connectionError } from '../../lib/zx-core/connections'
 import type { ZXGraph3D, ZXNode, Vector3 } from '../../types/zx'
 
 export interface SpiderCanvasApi {
@@ -13,6 +14,7 @@ interface Spider3DCanvasViewProps {
   selectedId?: string
   onSelect: (id: string) => void
   onMove: (id: string, position: Vector3) => void
+  onConnect: (source: string, target: string) => string | undefined
   onDropElement?: (elementId: PictureElementId, position: Vector3) => void
   apiRef?: RefObject<SpiderCanvasApi | null>
   className?: string
@@ -40,7 +42,7 @@ function labelSprite(node: ZXNode) {
   return sprite
 }
 
-export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onDropElement, apiRef, className = '' }: Spider3DCanvasViewProps) {
+export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onConnect, onDropElement, apiRef, className = '' }: Spider3DCanvasViewProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const callbacks = useRef({ onSelect, onMove })
   const controls = useRef<{ zoom: (factor: number) => void; reset: () => void; pointAt: (clientX: number, clientY: number) => Vector3; center: () => Vector3 } | null>(null)
@@ -48,12 +50,61 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onDrop
   const savedView = useRef<{ projection: string; position: THREE.Vector3; target: THREE.Vector3; zoom: number } | null>(null)
   const [projection, setProjection] = useState<'3d' | '2d'>('3d')
   const [dropActive, setDropActive] = useState(false)
+  const [connecting, setConnecting] = useState(false)
+  const [connectionSource, setConnectionSource] = useState<string>()
+  const [connectionMessage, setConnectionMessage] = useState('')
+  const connectionRef = useRef({ enabled: false, source: undefined as string | undefined, hover: undefined as string | undefined })
+  const connectionButtons = useRef(new Map<string, HTMLButtonElement>())
+  const cancelConnection = () => {
+    connectionRef.current.source = undefined
+    connectionRef.current.hover = undefined
+    setConnectionSource(undefined)
+    setConnectionMessage('Connection cancelled. Choose a source node.')
+  }
+  const chooseConnectionNode = (id: string) => {
+    onSelect(id)
+    const source = connectionRef.current.source
+    if (!source) {
+      connectionRef.current.source = id
+      setConnectionSource(id)
+      setConnectionMessage('Choose a target node. Esc cancels.')
+      return
+    }
+    const error = onConnect(source, id)
+    setConnectionMessage(error ?? 'Connected. Choose a source node for another wire.')
+    if (!error) {
+      connectionRef.current.source = undefined
+      connectionRef.current.hover = undefined
+      setConnectionSource(undefined)
+    }
+  }
   useEffect(() => {
     callbacks.current = { onSelect, onMove }
   }, [onSelect, onMove])
   useEffect(() => {
     selectedRef.current = selectedId
   }, [selectedId])
+  useEffect(() => {
+    if (connectionRef.current.source && !graph.nodes.some((node) => node.id === connectionRef.current.source)) {
+      connectionRef.current.source = undefined
+      setConnectionSource(undefined)
+      setConnectionMessage('Source removed. Choose a source node.')
+    }
+  }, [graph])
+  useEffect(() => {
+    if (!connecting) return
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        connectionRef.current.source = undefined
+        connectionRef.current.hover = undefined
+        setConnectionSource(undefined)
+        setConnectionMessage('Connection cancelled. Choose a source node.')
+      }
+    }
+    window.addEventListener('keydown', escape)
+    return () => window.removeEventListener('keydown', escape)
+  }, [connecting])
 
   useEffect(() => {
     const host = hostRef.current
@@ -147,6 +198,16 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onDrop
     const pickables: THREE.Object3D[] = []
     const edgeObjects: { from: string; to: string; line: THREE.Mesh; pulse: THREE.Mesh; radius: number }[] = []
     const nodeMap = new Map(graph.nodes.map((node) => [node.id, node]))
+    const previewGeometry = new THREE.BufferGeometry()
+    const previewPositions = new THREE.BufferAttribute(new Float32Array(6), 3)
+    previewGeometry.setAttribute('position', previewPositions)
+    const previewMaterial = new THREE.LineBasicMaterial({ color: '#83f0d7', depthTest: false })
+    const preview = new THREE.Line(previewGeometry, previewMaterial)
+    preview.frustumCulled = false
+    preview.renderOrder = 1
+    preview.visible = false
+    scene.add(preview)
+    const previewPoint = new THREE.Vector3()
     for (const edge of graph.edges) {
       const from = nodeMap.get(edge.source)
       const to = nodeMap.get(edge.target)
@@ -258,6 +319,7 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onDrop
       return toGraph(raycaster.ray.intersectPlane(plane, point) ? point : navigation.target)
     }
     const down = (event: PointerEvent) => {
+      if (connectionRef.current.enabled) return
       if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey) return
       updatePointer(event)
       const hit = raycaster.intersectObjects(pickables, false)[0]?.object as THREE.Mesh | undefined
@@ -276,6 +338,14 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onDrop
       }
     }
     const move = (event: PointerEvent) => {
+      if (connectionRef.current.enabled && connectionRef.current.source) {
+        updatePointer(event)
+        const source = nodeMeshes.get(connectionRef.current.source)
+        if (source) {
+          const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), source.position)
+          raycaster.ray.intersectPlane(plane, previewPoint)
+        }
+      }
       if (dragging) {
         updatePointer(event)
         if (raycaster.ray.intersectPlane(dragPlane, dragPoint)) {
@@ -295,6 +365,7 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onDrop
       navigation.enabled = true
     }
     const doubleClick = (event: MouseEvent) => {
+      if (connectionRef.current.enabled) return
       updatePointer(event as PointerEvent)
       const hit = raycaster.intersectObjects(pickables, false)[0]?.object as THREE.Mesh | undefined
       if (!hit) return
@@ -322,10 +393,41 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onDrop
         if (!start || !end) continue
         edge.pulse.position.lerpVectors(start, end, (time * 0.35 + index * 0.21) % 1)
       }
+      const screenNodes = new Map<string, THREE.Vector3>()
+      if (connectionButtons.current.size) {
+        for (const [id, mesh] of nodeMeshes) screenNodes.set(id, mesh.position.clone().project(camera))
+      }
       for (const [id, mesh] of nodeMeshes) {
         const selected = selectedRef.current === id
-        ;(mesh.material as THREE.MeshStandardMaterial).emissiveIntensity = selected ? 1.8 : 0.85
-        ;(nodeHalos.get(id)!.material as THREE.MeshBasicMaterial).opacity = selected ? 0.22 : 0
+        const source = connectionRef.current.source === id
+        ;(mesh.material as THREE.MeshStandardMaterial).emissiveIntensity = selected || source ? 1.8 : 0.85
+        ;(nodeHalos.get(id)!.material as THREE.MeshBasicMaterial).opacity = source ? 0.4 : selected ? 0.22 : 0
+        const button = connectionButtons.current.get(id)
+        if (button) {
+          const screen = screenNodes.get(id)!
+          let diameter = 44
+          for (const [otherId, other] of screenNodes) {
+            if (otherId === id) continue
+            const separation = Math.hypot((other.x - screen.x) * host.clientWidth / 2, (other.y - screen.y) * host.clientHeight / 2)
+            diameter = Math.min(diameter, separation * 1.7)
+          }
+          button.style.width = button.style.height = `${Math.max(24, diameter)}px`
+          button.style.left = `${(screen.x + 1) * host.clientWidth / 2}px`
+          button.style.top = `${(1 - screen.y) * host.clientHeight / 2}px`
+          button.style.visibility = Math.abs(screen.x) <= 1 && Math.abs(screen.y) <= 1 && Math.abs(screen.z) <= 1 ? 'visible' : 'hidden'
+          button.style.zIndex = `${Math.round((1 - screen.z) * 100000)}`
+        }
+      }
+      const connection = connectionRef.current
+      const start = connection.source ? nodeMeshes.get(connection.source)?.position : undefined
+      preview.visible = connection.enabled && Boolean(start)
+      if (preview.visible && start) {
+        const end = (connection.hover ? nodeMeshes.get(connection.hover)?.position : undefined) ?? previewPoint
+        previewPositions.setXYZ(0, start.x, start.y, start.z)
+        previewPositions.setXYZ(1, end.x, end.y, end.z)
+        previewPositions.needsUpdate = true
+        const invalid = connection.hover && connectionError(graph, connection.source!, connection.hover)
+        previewMaterial.color.set(invalid ? '#ff9aaa' : '#83f0d7')
       }
       renderer.render(scene, camera)
     }
@@ -357,6 +459,8 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onDrop
         }
       })
       renderer.dispose()
+      previewGeometry.dispose()
+      previewMaterial.dispose()
       host.removeChild(renderer.domElement)
     }
   }, [graph, projection])
@@ -367,11 +471,8 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onDrop
     return () => { apiRef.current = null }
   }, [apiRef])
 
-  return <div className={`spider-canvas-wrap ${className}`}>
-    <div
-      ref={hostRef}
-      className={`spider-3d-canvas ${dropActive ? 'drop-active' : ''}`}
-      aria-label={`Interactive ${projection} ZX spider graph`}
+  return <div
+      className={`spider-canvas-wrap ${className}`}
       onDragOver={(event) => {
         if (!onDropElement || !event.dataTransfer.types.includes(pictureElementMime)) return
         event.preventDefault()
@@ -386,18 +487,52 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onDrop
         const elementId = event.dataTransfer.getData(pictureElementMime)
         if (!onDropElement || !controls.current || !isPictureElementId(elementId)) return
         event.preventDefault()
+        cancelConnection()
         onDropElement(elementId, controls.current.pointAt(event.clientX, event.clientY))
       }}
+    >
+    <div
+      ref={hostRef}
+      className={`spider-3d-canvas ${dropActive ? 'drop-active' : ''}`}
+      aria-label={`Interactive ${projection} ZX spider graph`}
     />
+    {connecting && <div className="canvas-connection-targets" aria-label="Canvas connection nodes">
+      {graph.nodes.map((node) => {
+        const error = connectionSource ? connectionError(graph, connectionSource, node.id) : undefined
+        return <button
+          key={node.id}
+          ref={(button) => { if (button) connectionButtons.current.set(node.id, button); else connectionButtons.current.delete(node.id) }}
+          type="button"
+          className={`canvas-connection-node ${connectionSource === node.id ? 'source' : error ? 'invalid' : ''}`}
+          aria-label={`${connectionSource ? 'Connect to' : 'Start connection from'} ${node.id}`}
+          aria-pressed={connectionSource === node.id}
+          title={`${node.kind.toUpperCase()} ${node.label ?? node.phase} · ${node.id}${error ? ` — ${error}` : ''}`}
+          onPointerEnter={() => { connectionRef.current.hover = node.id }}
+          onPointerLeave={() => { connectionRef.current.hover = undefined }}
+          onFocus={() => { connectionRef.current.hover = node.id }}
+          onBlur={() => { connectionRef.current.hover = undefined }}
+          onClick={() => chooseConnectionNode(node.id)}
+        ><span className="sr-only">{node.id}</span></button>
+      })}
+    </div>}
     <div className="canvas-toolbar" aria-label="Graph canvas controls">
+      <button type="button" aria-label="Connect nodes" aria-pressed={connecting} onClick={() => {
+        const enabled = !connecting
+        connectionRef.current.enabled = enabled
+        cancelConnection()
+        setConnecting(enabled)
+        setConnectionMessage(enabled ? 'Choose a source node, then a target. Esc cancels.' : '')
+      }}>Connect</button>
+      {connecting && <button type="button" aria-label="Cancel connection" onClick={cancelConnection}>Cancel</button>}
       <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => controls.current?.zoom(1.2)}>+</button>
       <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => controls.current?.zoom(1 / 1.2)}>−</button>
       <span />
       <button type="button" aria-label="Reset camera" title="Reset camera" onClick={() => controls.current?.reset()}>⌂</button>
-      <button type="button" aria-label={projection === '3d' ? 'Switch to 2D view' : 'Switch to 3D view'} aria-pressed={projection === '2d'} onClick={() => setProjection((current) => current === '3d' ? '2d' : '3d')}>
+      <button type="button" aria-label={projection === '3d' ? 'Switch to 2D view' : 'Switch to 3D view'} aria-pressed={projection === '2d'} onClick={() => { cancelConnection(); setProjection((current) => current === '3d' ? '2d' : '3d') }}>
         {projection === '3d' ? '2D' : '3D'}
       </button>
     </div>
-    <div className="canvas-hint">{projection === '3d' ? 'DRAG ORBIT · SHIFT/RIGHT-DRAG PAN' : 'DRAG PAN'} · SCROLL/PINCH ZOOM · DOUBLE-CLICK FOCUS</div>
+    {connecting && <div className="canvas-connection-status" role="status">{connectionMessage} <span>Palette wires are included in ZX JSON, not OpenQASM.</span></div>}
+    <div className="canvas-hint">{connecting ? 'CLICK/TAP TWO NODES · TAB + ENTER ALSO CONNECTS' : `${projection === '3d' ? 'DRAG ORBIT · SHIFT/RIGHT-DRAG PAN' : 'DRAG PAN'} · SCROLL/PINCH ZOOM · DOUBLE-CLICK FOCUS`}</div>
   </div>
 }
