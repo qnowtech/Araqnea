@@ -4,6 +4,10 @@ import type { ZXEdge, ZXGraph3D, ZXNode } from '../../types/zx'
 const phaseFor = (gate: CircuitGate) =>
   ({ x: 'π', y: 'π', z: 'π', s: 'π/2', t: 'π/4', rx: gate.parameter ?? 'θ', rz: gate.parameter ?? 'θ' } as Partial<Record<CircuitGate['name'], string>>)[gate.name] ?? '0'
 
+export const columnSpacing = 135
+export const wireSpacing = 115
+export const wireY = (wire: number, qubits: number) => (wire - (qubits - 1) / 2) * wireSpacing
+
 export function translateCircuit(circuit: QuantumCircuit): ZXGraph3D {
   const nodes: ZXNode[] = []
   const edges: ZXEdge[] = []
@@ -15,7 +19,7 @@ export function translateCircuit(circuit: QuantumCircuit): ZXGraph3D {
       phase: '',
       wire,
       label: `|0⟩`,
-      position: { x: -150, y: (wire - (circuit.qubits - 1) / 2) * 115, z: 0 },
+      position: { x: -150, y: wireY(wire, circuit.qubits), z: 0 },
     })
     return id
   })
@@ -34,8 +38,8 @@ export function translateCircuit(circuit: QuantumCircuit): ZXGraph3D {
       wire,
       gateId: gate.id,
       position: {
-        x: column * 135,
-        y: (wire - (circuit.qubits - 1) / 2) * 115,
+        x: column * columnSpacing,
+        y: wireY(wire, circuit.qubits),
         z: (column % 2 ? 1 : -1) * (wire % 2 ? 22 : 0),
       },
     })
@@ -55,7 +59,7 @@ export function translateCircuit(circuit: QuantumCircuit): ZXGraph3D {
         wire,
         label: `M→c[${gate.classicalBit ?? wire}]`,
         gateId: gate.id,
-        position: { x: column * 135, y: (wire - (circuit.qubits - 1) / 2) * 115, z: 0 },
+        position: { x: column * columnSpacing, y: wireY(wire, circuit.qubits), z: 0 },
       })
       connect(last[wire], node)
       last[wire] = node
@@ -67,7 +71,7 @@ export function translateCircuit(circuit: QuantumCircuit): ZXGraph3D {
         phase: '',
         wire,
         gateId: gate.id,
-        position: { x: column * 135, y: (wire - (circuit.qubits - 1) / 2) * 115, z: 0 },
+        position: { x: column * columnSpacing, y: wireY(wire, circuit.qubits), z: 0 },
       })
       connect(last[wire], id)
       last[wire] = id
@@ -97,8 +101,8 @@ export function translateCircuit(circuit: QuantumCircuit): ZXGraph3D {
       wire,
       label: '⟩',
       position: {
-        x: Math.max(circuit.gates.length, 1) * 135 + 150,
-        y: (wire - (circuit.qubits - 1) / 2) * 115,
+        x: Math.max(circuit.gates.length, 1) * columnSpacing + 150,
+        y: wireY(wire, circuit.qubits),
         z: 0,
       },
     })

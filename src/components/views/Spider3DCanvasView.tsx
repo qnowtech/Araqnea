@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { isPictureElementId, pictureElementMime, type PictureElementId } from '../../lib/zx-core/pictureElements'
@@ -7,14 +7,18 @@ import type { ZXGraph3D, ZXNode, Vector3 } from '../../types/zx'
 
 export interface SpiderCanvasApi {
   centerPoint: () => Vector3
+  startConnection: (id: string) => void
 }
 
 interface Spider3DCanvasViewProps {
   graph: ZXGraph3D
-  selectedId?: string
-  onSelect: (id: string) => void
-  onMove: (id: string, position: Vector3) => void
+  selectedIds: string[]
+  onSelectionChange: (ids: string[]) => void
+  onMove: (moves: Record<string, Vector3>) => void
   onConnect: (source: string, target: string) => string | undefined
+  onDelete: (ids: string[]) => void
+  canDelete: (id: string) => boolean
+  describeNode: (node: ZXNode) => string
   onDropElement?: (elementId: PictureElementId, position: Vector3) => void
   apiRef?: RefObject<SpiderCanvasApi | null>
   className?: string
@@ -42,69 +46,114 @@ function labelSprite(node: ZXNode) {
   return sprite
 }
 
-export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onConnect, onDropElement, apiRef, className = '' }: Spider3DCanvasViewProps) {
+type Marquee = { x0: number; y0: number; x1: number; y1: number }
+const isEditable = (target: EventTarget | null) =>
+  target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+
+export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMove, onConnect, onDelete, canDelete, describeNode, onDropElement, apiRef, className = '' }: Spider3DCanvasViewProps) {
   const hostRef = useRef<HTMLDivElement>(null)
-  const callbacks = useRef({ onSelect, onMove })
+  const callbacks = useRef({ onSelectionChange, onMove, describeNode })
   const controls = useRef<{ zoom: (factor: number) => void; reset: () => void; pointAt: (clientX: number, clientY: number) => Vector3; center: () => Vector3 } | null>(null)
-  const selectedRef = useRef(selectedId)
+  const selectedRef = useRef(new Set(selectedIds))
   const savedView = useRef<{ projection: string; position: THREE.Vector3; target: THREE.Vector3; zoom: number } | null>(null)
   const [projection, setProjection] = useState<'3d' | '2d'>('3d')
   const [dropActive, setDropActive] = useState(false)
-  const [connecting, setConnecting] = useState(false)
+  const [boxMode, setBoxMode] = useState(false)
+  const boxModeRef = useRef(false)
+  const [marquee, setMarquee] = useState<Marquee>()
+  const [hoverId, setHoverId] = useState<string>()
   const [connectionSource, setConnectionSource] = useState<string>()
   const [connectionMessage, setConnectionMessage] = useState('')
-  const connectionRef = useRef({ enabled: false, source: undefined as string | undefined, hover: undefined as string | undefined })
-  const connectionButtons = useRef(new Map<string, HTMLButtonElement>())
-  const cancelConnection = () => {
+  const messageTimer = useRef(0)
+  const connectionRef = useRef({ source: undefined as string | undefined, hover: undefined as string | undefined })
+  const nodeHandles = useRef(new Map<string, HTMLButtonElement>())
+  const actionMenu = useRef<HTMLDivElement>(null)
+  const hoverTip = useRef<HTMLDivElement>(null)
+  const hoverRef = useRef<string | undefined>(undefined)
+  const connecting = Boolean(connectionSource)
+
+  const flash = useCallback((message: string) => {
+    window.clearTimeout(messageTimer.current)
+    setConnectionMessage(message)
+    messageTimer.current = window.setTimeout(() => setConnectionMessage(''), 2600)
+  }, [])
+  const startConnection = useCallback((id: string) => {
+    window.clearTimeout(messageTimer.current)
+    connectionRef.current.source = id
+    connectionRef.current.hover = undefined
+    setConnectionSource(id)
+    callbacks.current.onSelectionChange([id])
+    setConnectionMessage('Click another node to connect it. Use × to delete this node. Esc or an empty click cancels.')
+  }, [])
+  const cancelConnection = useCallback((message = '') => {
     connectionRef.current.source = undefined
     connectionRef.current.hover = undefined
     setConnectionSource(undefined)
-    setConnectionMessage('Connection cancelled. Choose a source node.')
-  }
+    if (message) flash(message)
+    else setConnectionMessage('')
+  }, [flash])
   const chooseConnectionNode = (id: string) => {
-    onSelect(id)
     const source = connectionRef.current.source
     if (!source) {
-      connectionRef.current.source = id
-      setConnectionSource(id)
-      setConnectionMessage('Choose a target node. Esc cancels.')
+      onSelectionChange([id])
+      return
+    }
+    if (source === id) {
+      cancelConnection('Connection cancelled.')
       return
     }
     const error = onConnect(source, id)
-    setConnectionMessage(error ?? 'Connected. Choose a source node for another wire.')
-    if (!error) {
-      connectionRef.current.source = undefined
-      connectionRef.current.hover = undefined
-      setConnectionSource(undefined)
+    if (error) {
+      setConnectionMessage(`${error} Choose another node, or press Esc.`)
+      return
     }
+    cancelConnection(`Connected ${source} → ${id}.`)
+    onSelectionChange([id])
+  }
+  const deleteNodes = (ids: string[]) => {
+    const deletable = ids.filter(canDelete)
+    if (!deletable.length) {
+      flash('Circuit inputs and outputs cannot be deleted.')
+      return
+    }
+    cancelConnection()
+    onDelete(deletable)
+    flash(`Deleted ${deletable.length} node${deletable.length === 1 ? '' : 's'}.`)
   }
   useEffect(() => {
-    callbacks.current = { onSelect, onMove }
-  }, [onSelect, onMove])
+    callbacks.current = { onSelectionChange, onMove, describeNode }
+  }, [onSelectionChange, onMove, describeNode])
   useEffect(() => {
-    selectedRef.current = selectedId
-  }, [selectedId])
+    selectedRef.current = new Set(selectedIds)
+  }, [selectedIds])
   useEffect(() => {
-    if (connectionRef.current.source && !graph.nodes.some((node) => node.id === connectionRef.current.source)) {
-      connectionRef.current.source = undefined
-      setConnectionSource(undefined)
-      setConnectionMessage('Source removed. Choose a source node.')
+    boxModeRef.current = boxMode
+  }, [boxMode])
+  useEffect(() => () => window.clearTimeout(messageTimer.current), [])
+  useEffect(() => {
+    if (connectionRef.current.source && !graph.nodes.some((node) => node.id === connectionRef.current.source)) cancelConnection()
+    if (hoverRef.current && !graph.nodes.some((node) => node.id === hoverRef.current)) {
+      hoverRef.current = undefined
+      setHoverId(undefined)
     }
-  }, [graph])
+  }, [graph, cancelConnection])
   useEffect(() => {
-    if (!connecting) return
-    const escape = (event: KeyboardEvent) => {
+    const keydown = (event: KeyboardEvent) => {
+      if (isEditable(event.target) || document.querySelector('[role="dialog"]')) return
       if (event.key === 'Escape') {
+        if (connectionRef.current.source) { event.preventDefault(); cancelConnection('Connection cancelled.') }
+        else if (selectedRef.current.size) { event.preventDefault(); onSelectionChange([]) }
+      } else if ((event.key === 'Delete' || event.key === 'Backspace') && selectedRef.current.size) {
         event.preventDefault()
-        connectionRef.current.source = undefined
-        connectionRef.current.hover = undefined
-        setConnectionSource(undefined)
-        setConnectionMessage('Connection cancelled. Choose a source node.')
+        deleteNodes([...selectedRef.current])
+      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
+        event.preventDefault()
+        onSelectionChange(graph.nodes.map((node) => node.id))
       }
     }
-    window.addEventListener('keydown', escape)
-    return () => window.removeEventListener('keydown', escape)
-  }, [connecting])
+    window.addEventListener('keydown', keydown)
+    return () => window.removeEventListener('keydown', keydown)
+  })
 
   useEffect(() => {
     const host = hostRef.current
@@ -300,9 +349,7 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onConn
     const raycaster = new THREE.Raycaster()
     const pointer = new THREE.Vector2()
     const dragPlane = new THREE.Plane()
-    const dragOffset = new THREE.Vector3()
     const dragPoint = new THREE.Vector3()
-    let dragging: THREE.Mesh | undefined
     const updatePointer = (event: PointerEvent) => {
       const rect = renderer.domElement.getBoundingClientRect()
       pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1)
@@ -318,27 +365,72 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onConn
       const point = new THREE.Vector3()
       return toGraph(raycaster.ray.intersectPlane(plane, point) ? point : navigation.target)
     }
+    const movable = (id: string) => {
+      const node = nodeMap.get(id)
+      return Boolean(node && (node.kind !== 'boundary' || node.custom))
+    }
+    const screenOf = (mesh: THREE.Object3D) => {
+      const point = mesh.position.clone().project(camera)
+      return { x: (point.x + 1) * host.clientWidth / 2, y: (1 - point.y) * host.clientHeight / 2, z: point.z }
+    }
+    const hostPoint = (event: PointerEvent) => {
+      const rect = host.getBoundingClientRect()
+      return { x: event.clientX - rect.left, y: event.clientY - rect.top }
+    }
+    let drag: { ids: string[]; start: THREE.Vector3; origins: Map<string, THREE.Vector3>; moved: boolean } | undefined
+    let box: { x0: number; y0: number; x1: number; y1: number; additive: boolean } | undefined
+    let press: { x: number; y: number } | undefined
+    const hitNode = (event: PointerEvent | MouseEvent) => {
+      updatePointer(event as PointerEvent)
+      return raycaster.intersectObjects(pickables, false)[0]?.object as THREE.Mesh | undefined
+    }
     const down = (event: PointerEvent) => {
-      if (connectionRef.current.enabled) return
-      if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey) return
-      updatePointer(event)
-      const hit = raycaster.intersectObjects(pickables, false)[0]?.object as THREE.Mesh | undefined
+      if (event.button !== 0 || event.shiftKey) return
+      const hit = hitNode(event)
+      if (connectionRef.current.source) {
+        if (!hit) {
+          cancelConnection('Connection cancelled.')
+          return
+        }
+        navigation.enabled = false
+        renderer.domElement.setPointerCapture(event.pointerId)
+        return
+      }
       if (hit) {
         navigation.enabled = false
         const id = hit.userData.nodeId as string
-        callbacks.current.onSelect(id)
-        const node = nodeMap.get(id)
-        if (node && (node.kind !== 'boundary' || node.custom)) {
-          dragging = hit
-          dragPlane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), hit.position)
-          raycaster.ray.intersectPlane(dragPlane, dragPoint)
-          dragOffset.copy(hit.position).sub(dragPoint)
-        }
         renderer.domElement.setPointerCapture(event.pointerId)
+        if (event.ctrlKey || event.metaKey) {
+          const next = new Set(selectedRef.current)
+          if (next.has(id)) next.delete(id)
+          else next.add(id)
+          selectedRef.current = next
+          callbacks.current.onSelectionChange([...next])
+          return
+        }
+        if (!selectedRef.current.has(id)) {
+          selectedRef.current = new Set([id])
+          callbacks.current.onSelectionChange([id])
+        }
+        if (!movable(id)) return
+        const ids = [...selectedRef.current].filter(movable)
+        dragPlane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), hit.position)
+        if (!raycaster.ray.intersectPlane(dragPlane, dragPoint)) return
+        drag = { ids, start: dragPoint.clone(), origins: new Map(ids.map((item) => [item, nodeMeshes.get(item)!.position.clone()])), moved: false }
+        return
       }
+      if (boxModeRef.current || event.ctrlKey || event.metaKey) {
+        navigation.enabled = false
+        const point = hostPoint(event)
+        box = { x0: point.x, y0: point.y, x1: point.x, y1: point.y, additive: event.ctrlKey || event.metaKey }
+        setMarquee({ x0: point.x, y0: point.y, x1: point.x, y1: point.y })
+        renderer.domElement.setPointerCapture(event.pointerId)
+        return
+      }
+      press = { x: event.clientX, y: event.clientY }
     }
     const move = (event: PointerEvent) => {
-      if (connectionRef.current.enabled && connectionRef.current.source) {
+      if (connectionRef.current.source) {
         updatePointer(event)
         const source = nodeMeshes.get(connectionRef.current.source)
         if (source) {
@@ -346,39 +438,85 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onConn
           raycaster.ray.intersectPlane(plane, previewPoint)
         }
       }
-      if (dragging) {
+      if (drag) {
         updatePointer(event)
         if (raycaster.ray.intersectPlane(dragPlane, dragPoint)) {
-          dragging.position.copy(dragPoint.add(dragOffset))
+          const delta = dragPoint.clone().sub(drag.start)
+          if (delta.lengthSq() > 1e-6) drag.moved = true
+          for (const id of drag.ids) nodeMeshes.get(id)?.position.copy(drag.origins.get(id)!).add(delta)
           refreshEdges()
         }
+        return
+      }
+      if (box) {
+        const point = hostPoint(event)
+        box.x1 = point.x
+        box.y1 = point.y
+        setMarquee({ x0: box.x0, y0: box.y0, x1: box.x1, y1: box.y1 })
+        return
+      }
+      if (event.buttons) return
+      const hovered = hitNode(event)?.userData.nodeId as string | undefined
+      if (hovered !== hoverRef.current) {
+        hoverRef.current = hovered
+        setHoverId(hovered)
       }
     }
-    const up = () => {
-      if (dragging) {
-        const nodeId = dragging.userData.nodeId as string
-        const position = dragging.position
-        const originalZ = nodeMap.get(nodeId)?.position.z ?? position.z * sceneScale
-        callbacks.current.onMove(nodeId, { x: position.x * sceneScale, y: position.y * sceneScale, z: is2D ? originalZ : position.z * sceneScale })
+    const up = (event: PointerEvent) => {
+      if (drag?.moved) {
+        const moves: Record<string, Vector3> = {}
+        for (const id of drag.ids) {
+          const position = nodeMeshes.get(id)!.position
+          const originalZ = nodeMap.get(id)?.position.z ?? position.z * sceneScale
+          moves[id] = { x: position.x * sceneScale, y: position.y * sceneScale, z: is2D ? originalZ : position.z * sceneScale }
+        }
+        callbacks.current.onMove(moves)
       }
-      dragging = undefined
+      if (box) {
+        const left = Math.min(box.x0, box.x1)
+        const right = Math.max(box.x0, box.x1)
+        const top = Math.min(box.y0, box.y1)
+        const bottom = Math.max(box.y0, box.y1)
+        if (right - left > 4 || bottom - top > 4) {
+          const inside = [...nodeMeshes].filter(([, mesh]) => {
+            const screen = screenOf(mesh)
+            return screen.x >= left && screen.x <= right && screen.y >= top && screen.y <= bottom && Math.abs(screen.z) <= 1
+          }).map(([id]) => id)
+          const next = box.additive ? [...new Set([...selectedRef.current, ...inside])] : inside
+          selectedRef.current = new Set(next)
+          callbacks.current.onSelectionChange(next)
+        } else if (!box.additive) {
+          selectedRef.current = new Set()
+          callbacks.current.onSelectionChange([])
+        }
+        setMarquee(undefined)
+      }
+      if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) < 4 && selectedRef.current.size) {
+        selectedRef.current = new Set()
+        callbacks.current.onSelectionChange([])
+      }
+      drag = undefined
+      box = undefined
+      press = undefined
       navigation.enabled = true
     }
     const doubleClick = (event: MouseEvent) => {
-      if (connectionRef.current.enabled) return
-      updatePointer(event as PointerEvent)
-      const hit = raycaster.intersectObjects(pickables, false)[0]?.object as THREE.Mesh | undefined
+      const hit = hitNode(event)
       if (!hit) return
-      const offset = camera.position.clone().sub(navigation.target)
-      navigation.target.copy(hit.position)
-      camera.position.copy(hit.position).add(offset)
-      navigation.update()
+      startConnection(hit.userData.nodeId as string)
+    }
+    const leave = () => {
+      if (hoverRef.current) {
+        hoverRef.current = undefined
+        setHoverId(undefined)
+      }
     }
     const contextMenu = (event: Event) => event.preventDefault()
     renderer.domElement.addEventListener('pointerdown', down, { capture: true })
     renderer.domElement.addEventListener('pointermove', move)
     renderer.domElement.addEventListener('pointerup', up)
     renderer.domElement.addEventListener('pointercancel', up)
+    renderer.domElement.addEventListener('pointerleave', leave)
     renderer.domElement.addEventListener('dblclick', doubleClick)
     renderer.domElement.addEventListener('contextmenu', contextMenu)
 
@@ -393,34 +531,44 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onConn
         if (!start || !end) continue
         edge.pulse.position.lerpVectors(start, end, (time * 0.35 + index * 0.21) % 1)
       }
-      const screenNodes = new Map<string, THREE.Vector3>()
-      if (connectionButtons.current.size) {
-        for (const [id, mesh] of nodeMeshes) screenNodes.set(id, mesh.position.clone().project(camera))
-      }
+      const connection = connectionRef.current
+      const screenNodes = new Map<string, { x: number; y: number; z: number }>()
+      for (const [id, mesh] of nodeMeshes) screenNodes.set(id, screenOf(mesh))
       for (const [id, mesh] of nodeMeshes) {
-        const selected = selectedRef.current === id
-        const source = connectionRef.current.source === id
-        ;(mesh.material as THREE.MeshStandardMaterial).emissiveIntensity = selected || source ? 1.8 : 0.85
-        ;(nodeHalos.get(id)!.material as THREE.MeshBasicMaterial).opacity = source ? 0.4 : selected ? 0.22 : 0
-        const button = connectionButtons.current.get(id)
-        if (button) {
+        const selected = selectedRef.current.has(id)
+        const source = connection.source === id
+        const hovered = hoverRef.current === id
+        ;(mesh.material as THREE.MeshStandardMaterial).emissiveIntensity = selected || source ? 1.8 : hovered ? 1.3 : 0.85
+        ;(nodeHalos.get(id)!.material as THREE.MeshBasicMaterial).opacity = source ? 0.4 : selected ? 0.26 : hovered ? 0.12 : 0
+        const handle = nodeHandles.current.get(id)
+        if (handle) {
           const screen = screenNodes.get(id)!
-          let diameter = 44
-          for (const [otherId, other] of screenNodes) {
-            if (otherId === id) continue
-            const separation = Math.hypot((other.x - screen.x) * host.clientWidth / 2, (other.y - screen.y) * host.clientHeight / 2)
-            diameter = Math.min(diameter, separation * 1.7)
+          let diameter = 40
+          if (connection.source) {
+            for (const [otherId, other] of screenNodes) {
+              if (otherId !== id) diameter = Math.min(diameter, Math.hypot(other.x - screen.x, other.y - screen.y) * 1.7)
+            }
           }
-          button.style.width = button.style.height = `${Math.max(24, diameter)}px`
-          button.style.left = `${(screen.x + 1) * host.clientWidth / 2}px`
-          button.style.top = `${(1 - screen.y) * host.clientHeight / 2}px`
-          button.style.visibility = Math.abs(screen.x) <= 1 && Math.abs(screen.y) <= 1 && Math.abs(screen.z) <= 1 ? 'visible' : 'hidden'
-          button.style.zIndex = `${Math.round((1 - screen.z) * 100000)}`
+          handle.style.width = handle.style.height = `${Math.max(22, diameter)}px`
+          handle.style.left = `${screen.x}px`
+          handle.style.top = `${screen.y}px`
+          handle.style.visibility = screen.x >= 0 && screen.x <= host.clientWidth && screen.y >= 0 && screen.y <= host.clientHeight && Math.abs(screen.z) <= 1 ? 'visible' : 'hidden'
+          handle.style.zIndex = `${Math.round((1 - screen.z) * 100000)}`
         }
       }
-      const connection = connectionRef.current
+      const anchor = connection.source ? screenNodes.get(connection.source) : undefined
+      if (actionMenu.current && anchor) {
+        actionMenu.current.style.left = `${anchor.x}px`
+        actionMenu.current.style.top = `${anchor.y}px`
+      }
+      const hoverAnchor = hoverRef.current ? screenNodes.get(hoverRef.current) : undefined
+      if (hoverTip.current && hoverAnchor) {
+        hoverTip.current.style.left = `${Math.min(Math.max(hoverAnchor.x, 130), host.clientWidth - 130)}px`
+        hoverTip.current.style.top = `${hoverAnchor.y}px`
+        hoverTip.current.classList.toggle('below', hoverAnchor.y < 130)
+      }
       const start = connection.source ? nodeMeshes.get(connection.source)?.position : undefined
-      preview.visible = connection.enabled && Boolean(start)
+      preview.visible = Boolean(start)
       if (preview.visible && start) {
         const end = (connection.hover ? nodeMeshes.get(connection.hover)?.position : undefined) ?? previewPoint
         previewPositions.setXYZ(0, start.x, start.y, start.z)
@@ -431,6 +579,7 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onConn
       }
       renderer.render(scene, camera)
     }
+    previewPoint.copy(connectionRef.current.source ? nodeMeshes.get(connectionRef.current.source)?.position ?? previewPoint : previewPoint)
     render()
 
     return () => {
@@ -442,6 +591,7 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onConn
       renderer.domElement.removeEventListener('pointermove', move)
       renderer.domElement.removeEventListener('pointerup', up)
       renderer.domElement.removeEventListener('pointercancel', up)
+      renderer.domElement.removeEventListener('pointerleave', leave)
       renderer.domElement.removeEventListener('dblclick', doubleClick)
       renderer.domElement.removeEventListener('contextmenu', contextMenu)
       controls.current = null
@@ -463,13 +613,20 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onConn
       previewMaterial.dispose()
       host.removeChild(renderer.domElement)
     }
-  }, [graph, projection])
+  }, [graph, projection, cancelConnection, startConnection])
 
   useEffect(() => {
     if (!apiRef) return
-    apiRef.current = { centerPoint: () => controls.current?.center() ?? { x: 0, y: 0, z: 0 } }
+    apiRef.current = {
+      centerPoint: () => controls.current?.center() ?? { x: 0, y: 0, z: 0 },
+      startConnection,
+    }
     return () => { apiRef.current = null }
-  }, [apiRef])
+  }, [apiRef, startConnection])
+
+  const hoverNode = hoverId && !connecting ? graph.nodes.find((node) => node.id === hoverId) : undefined
+  const [hoverTitle, ...hoverBody] = hoverNode ? describeNode(hoverNode).split('\n') : []
+  const sourceDeletable = connectionSource ? canDelete(connectionSource) : false
 
   return <div
       className={`spider-canvas-wrap ${className}`}
@@ -494,46 +651,51 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onConn
     <div
       ref={hostRef}
       data-tour="canvas"
-      className={`spider-3d-canvas ${dropActive ? 'drop-active' : ''}`}
+      className={`spider-3d-canvas ${dropActive ? 'drop-active' : ''} ${boxMode ? 'box-mode' : ''} ${hoverId && !connecting ? 'node-hover' : ''}`}
       aria-label={`Interactive ${projection} ZX spider graph`}
     />
-    {connecting && <div className="canvas-connection-targets" aria-label="Canvas connection nodes">
+    <div className={`canvas-node-handles ${connecting ? 'connecting' : ''}`} aria-label="Canvas nodes">
       {graph.nodes.map((node) => {
-        const error = connectionSource ? connectionError(graph, connectionSource, node.id) : undefined
+        const error = connectionSource && connectionSource !== node.id ? connectionError(graph, connectionSource, node.id) : undefined
+        const selected = selectedIds.includes(node.id)
         return <button
           key={node.id}
-          ref={(button) => { if (button) connectionButtons.current.set(node.id, button); else connectionButtons.current.delete(node.id) }}
+          ref={(button) => { if (button) nodeHandles.current.set(node.id, button); else nodeHandles.current.delete(node.id) }}
           type="button"
-          className={`canvas-connection-node ${connectionSource === node.id ? 'source' : error ? 'invalid' : ''}`}
-          aria-label={`${connectionSource ? 'Connect to' : 'Start connection from'} ${node.id}`}
-          aria-pressed={connectionSource === node.id}
-          title={`${node.kind.toUpperCase()} ${node.label ?? node.phase} · ${node.id}${error ? ` — ${error}` : ''}`}
+          className={`canvas-node-handle ${connectionSource === node.id ? 'source' : error ? 'invalid' : ''} ${selected ? 'selected' : ''}`}
+          data-node-id={node.id}
+          aria-label={connectionSource ? `${connectionSource === node.id ? 'Cancel connection from' : 'Connect to'} ${node.id}` : `Select ${node.id}`}
+          aria-pressed={connectionSource ? connectionSource === node.id : selected}
+          data-tip={`${describeNode(node)}${error ? `\n⚠ ${error}` : ''}`}
           onPointerEnter={() => { connectionRef.current.hover = node.id }}
           onPointerLeave={() => { connectionRef.current.hover = undefined }}
           onFocus={() => { connectionRef.current.hover = node.id }}
           onBlur={() => { connectionRef.current.hover = undefined }}
           onClick={() => chooseConnectionNode(node.id)}
+          onKeyDown={(event) => {
+            if (event.key === 'c' && !connectionSource) { event.preventDefault(); startConnection(node.id) }
+          }}
         ><span className="sr-only">{node.id}</span></button>
       })}
+    </div>
+    {connectionSource && <div className="canvas-node-actions" ref={actionMenu} role="toolbar" aria-label={`Actions for ${connectionSource}`}>
+      {sourceDeletable && <button type="button" className="node-delete" aria-label={`Delete ${connectionSource}`} data-tip={'Delete node\nRemoves this node. Circuit spiders remove their gate from the code and gate view.'} onClick={() => deleteNodes([connectionSource])}>×</button>}
     </div>}
+    {hoverNode && <div className="canvas-hover-tip" ref={hoverTip} role="tooltip"><b>{hoverTitle}</b>{hoverBody.map((line) => <span key={line}>{line}</span>)}</div>}
+    {marquee && <div className="canvas-marquee" style={{ left: Math.min(marquee.x0, marquee.x1), top: Math.min(marquee.y0, marquee.y1), width: Math.abs(marquee.x1 - marquee.x0), height: Math.abs(marquee.y1 - marquee.y0) }} />}
     <div className="canvas-toolbar" data-tour="canvas-toolbar" aria-label="Graph canvas controls">
-      <button type="button" aria-label="Connect nodes" aria-pressed={connecting} onClick={() => {
-        const enabled = !connecting
-        connectionRef.current.enabled = enabled
-        cancelConnection()
-        setConnecting(enabled)
-        setConnectionMessage(enabled ? 'Choose a source node, then a target. Esc cancels.' : '')
-      }}>Connect</button>
-      {connecting && <button type="button" aria-label="Cancel connection" onClick={cancelConnection}>Cancel</button>}
-      <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => controls.current?.zoom(1.2)}>+</button>
-      <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => controls.current?.zoom(1 / 1.2)}>−</button>
+      <button type="button" aria-label="Select all nodes" data-tip={'Select all\nSelects every node so you can move or delete them together. Shortcut: Ctrl/⌘ + A.'} onClick={() => onSelectionChange(graph.nodes.map((node) => node.id))}>All</button>
+      <button type="button" aria-label="Box select" aria-pressed={boxMode} data-tip={'Box select\nDrag a rectangle over empty canvas to select nodes. Ctrl/⌘ + drag also box-selects. Drag any selected node to move the group.'} onClick={() => setBoxMode((current) => !current)}>▭ Box</button>
+      {connecting && <button type="button" aria-label="Cancel connection" onClick={() => cancelConnection('Connection cancelled.')}>Cancel</button>}
       <span />
-      <button type="button" aria-label="Reset camera" title="Reset camera" onClick={() => controls.current?.reset()}>⌂</button>
-      <button type="button" aria-label={projection === '3d' ? 'Switch to 2D view' : 'Switch to 3D view'} aria-pressed={projection === '2d'} onClick={() => { cancelConnection(); setProjection((current) => current === '3d' ? '2d' : '3d') }}>
+      <button type="button" aria-label="Zoom in" data-tip="Zoom in" onClick={() => controls.current?.zoom(1.2)}>+</button>
+      <button type="button" aria-label="Zoom out" data-tip="Zoom out" onClick={() => controls.current?.zoom(1 / 1.2)}>−</button>
+      <button type="button" aria-label="Reset camera" data-tip="Reset camera" onClick={() => controls.current?.reset()}>⌂</button>
+      <button type="button" aria-label={projection === '3d' ? 'Switch to 2D view' : 'Switch to 3D view'} aria-pressed={projection === '2d'} data-tip={projection === '3d' ? 'Flat 2D view\nOrthographic layout, easier for selecting and wiring.' : '3D view\nOrbit around the spider graph.'} onClick={() => { cancelConnection(); setProjection((current) => current === '3d' ? '2d' : '3d') }}>
         {projection === '3d' ? '2D' : '3D'}
       </button>
     </div>
-    {connecting && <div className="canvas-connection-status" role="status">{connectionMessage} <span>Palette wires are included in ZX JSON, not OpenQASM.</span></div>}
-    <div className="canvas-hint">{connecting ? 'CLICK/TAP TWO NODES · TAB + ENTER ALSO CONNECTS' : `${projection === '3d' ? 'DRAG ORBIT · SHIFT/RIGHT-DRAG PAN' : 'DRAG PAN'} · SCROLL/PINCH ZOOM · DOUBLE-CLICK FOCUS`}</div>
+    {connectionMessage && <div className="canvas-connection-status" role="status">{connectionMessage}{connecting && <span>Palette wires are included in ZX JSON, not OpenQASM.</span>}</div>}
+    <div className="canvas-hint">{connecting ? 'CLICK A NODE TO CONNECT · × DELETES · ESC CANCELS' : `${boxMode ? 'DRAG TO BOX-SELECT' : projection === '3d' ? 'DRAG ORBIT · SHIFT/RIGHT-DRAG PAN' : 'DRAG PAN'} · DOUBLE-CLICK NODE TO CONNECT OR DELETE · DEL REMOVES SELECTION`}</div>
   </div>
 }
