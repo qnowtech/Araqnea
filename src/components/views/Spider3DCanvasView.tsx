@@ -19,7 +19,7 @@ function labelSprite(node: ZXNode) {
   canvas.width = 256
   canvas.height = 96
   const context = canvas.getContext('2d')!
-  context.font = 'bold 30px monospace'
+  context.font = 'bold 48px monospace'
   context.textAlign = 'center'
   context.shadowColor = '#72ffe1'
   context.shadowBlur = 12
@@ -28,7 +28,7 @@ function labelSprite(node: ZXNode) {
   context.fillText(text, 128, 58)
   const texture = new THREE.CanvasTexture(canvas)
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }))
-  sprite.scale.set(1.45, 0.54, 1)
+  sprite.scale.set(2.2, 0.82, 1)
   sprite.position.y = node.kind === 'boundary' ? 0.62 : 0.82
   return sprite
 }
@@ -62,9 +62,8 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, classN
     const target = graph.nodes.length ? bounds.getCenter(new THREE.Vector3()) : new THREE.Vector3()
     const aspect = host.clientWidth / Math.max(1, host.clientHeight)
     const size = graph.nodes.length ? bounds.getSize(new THREE.Vector3()) : new THREE.Vector3()
-    const radius = size.length() / 2 + 1.5
     const halfFov = THREE.MathUtils.degToRad(24)
-    const distance = Math.max(12, radius / Math.sin(Math.min(halfFov, Math.atan(Math.tan(halfFov) * aspect))))
+    const distance = Math.max(12, (size.x + 3) / (2 * Math.tan(halfFov) * aspect), (size.y + 3) / (2 * Math.tan(halfFov))) + size.z
     const frustumHeight = Math.max(8, (size.y + 3), (size.x + 3) / aspect)
     scene.fog = new THREE.Fog('#08111d', Math.max(20, distance * 0.75), Math.max(65, distance * 2.5))
     const camera = is2D
