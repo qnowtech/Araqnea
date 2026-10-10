@@ -93,7 +93,7 @@ function App() {
     addedCounter.current += 1
     const index = addedCounter.current
     const centre = canvasApi.current?.centerPoint() ?? { x: 0, y: 0, z: 0 }
-    const position = at ?? { x: centre.x + ((index % 5) - 2) * 25, y: centre.y + ((index % 3) - 1) * 25, z: centre.z }
+    const position = at ?? { x: centre.x + ((index % 5) - 2) * 100, y: centre.y + ((index % 3) - 1) * 100, z: centre.z }
     const element = buildPictureElement(elementId, position, `pic${index}-${elementId}`)
     setAdded((current) => ({ nodes: [...current.nodes, ...element.nodes], edges: [...current.edges, ...element.edges] }))
     const focus = element.nodes.find((node) => node.kind !== 'boundary') ?? element.nodes[0]

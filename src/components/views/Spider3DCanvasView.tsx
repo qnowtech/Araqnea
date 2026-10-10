@@ -393,6 +393,10 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onConn
         if (!start || !end) continue
         edge.pulse.position.lerpVectors(start, end, (time * 0.35 + index * 0.21) % 1)
       }
+      const screenNodes = new Map<string, THREE.Vector3>()
+      if (connectionButtons.current.size) {
+        for (const [id, mesh] of nodeMeshes) screenNodes.set(id, mesh.position.clone().project(camera))
+      }
       for (const [id, mesh] of nodeMeshes) {
         const selected = selectedRef.current === id
         const source = connectionRef.current.source === id
@@ -400,7 +404,14 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onConn
         ;(nodeHalos.get(id)!.material as THREE.MeshBasicMaterial).opacity = source ? 0.4 : selected ? 0.22 : 0
         const button = connectionButtons.current.get(id)
         if (button) {
-          const screen = mesh.position.clone().project(camera)
+          const screen = screenNodes.get(id)!
+          let diameter = 44
+          for (const [otherId, other] of screenNodes) {
+            if (otherId === id) continue
+            const separation = Math.hypot((other.x - screen.x) * host.clientWidth / 2, (other.y - screen.y) * host.clientHeight / 2)
+            diameter = Math.min(diameter, separation * 1.7)
+          }
+          button.style.width = button.style.height = `${Math.max(24, diameter)}px`
           button.style.left = `${(screen.x + 1) * host.clientWidth / 2}px`
           button.style.top = `${(1 - screen.y) * host.clientHeight / 2}px`
           button.style.visibility = Math.abs(screen.x) <= 1 && Math.abs(screen.y) <= 1 && Math.abs(screen.z) <= 1 ? 'visible' : 'hidden'
@@ -460,11 +471,8 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onConn
     return () => { apiRef.current = null }
   }, [apiRef])
 
-  return <div className={`spider-canvas-wrap ${className}`}>
-    <div
-      ref={hostRef}
-      className={`spider-3d-canvas ${dropActive ? 'drop-active' : ''}`}
-      aria-label={`Interactive ${projection} ZX spider graph`}
+  return <div
+      className={`spider-canvas-wrap ${className}`}
       onDragOver={(event) => {
         if (!onDropElement || !event.dataTransfer.types.includes(pictureElementMime)) return
         event.preventDefault()
@@ -482,6 +490,11 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onConn
         cancelConnection()
         onDropElement(elementId, controls.current.pointAt(event.clientX, event.clientY))
       }}
+    >
+    <div
+      ref={hostRef}
+      className={`spider-3d-canvas ${dropActive ? 'drop-active' : ''}`}
+      aria-label={`Interactive ${projection} ZX spider graph`}
     />
     {connecting && <div className="canvas-connection-targets" aria-label="Canvas connection nodes">
       {graph.nodes.map((node) => {
