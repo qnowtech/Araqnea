@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { examples } from './data/examples'
 import { CodeView } from './components/views/CodeView'
 import { GateCircuitView } from './components/views/GateCircuitView'

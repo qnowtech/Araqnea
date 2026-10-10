@@ -323,7 +323,7 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, classN
       renderer.domElement.removeEventListener('wheel', wheel)
       renderer.domElement.removeEventListener('dblclick', doubleClick)
       renderer.domElement.removeEventListener('contextmenu', contextMenu)
-      controls.current = undefined
+      controls.current = null
       scene.traverse((object) => {
         if (object instanceof THREE.Mesh) {
           object.geometry.dispose()
