@@ -2,7 +2,7 @@ import type { CircuitGate, QuantumCircuit } from '../../types/circuit'
 import type { ZXEdge, ZXGraph3D, ZXNode } from '../../types/zx'
 
 const phaseFor = (gate: CircuitGate) =>
-  ({ x: 'π', y: 'π', z: 'π', s: 'π/2', t: 'π/4', rx: gate.parameter ?? 'θ', rz: gate.parameter ?? 'θ' })[gate.name] ?? '0'
+  ({ x: 'π', y: 'π', z: 'π', s: 'π/2', t: 'π/4', rx: gate.parameter ?? 'θ', rz: gate.parameter ?? 'θ' } as Partial<Record<CircuitGate['name'], string>>)[gate.name] ?? '0'
 
 export function translateCircuit(circuit: QuantumCircuit): ZXGraph3D {
   const nodes: ZXNode[] = []

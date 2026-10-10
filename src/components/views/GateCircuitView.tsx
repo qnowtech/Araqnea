@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react'
 import type { CircuitGate, GateName, QuantumCircuit } from '../../types/circuit'
 
 const palette: { name: GateName; label: string }[] = [
@@ -27,7 +28,7 @@ export function GateCircuitView({ circuit, onAdd, onRemove }: GateCircuitViewPro
           onClick={() => onAdd(gate.name, 0)}
         >{gate.label}</button>)}
       </div>
-      <div className="circuit-grid" style={{ '--wire-count': circuit.qubits } as React.CSSProperties}>
+      <div className="circuit-grid" style={{ '--wire-count': circuit.qubits } as CSSProperties}>
         {Array.from({ length: circuit.qubits }, (_, wire) => (
           <div className="circuit-row" key={wire} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
             event.preventDefault()

@@ -23,7 +23,7 @@ function App() {
   const [source, setSource] = useState<string>(examples['Bell state'])
   const [mode, setMode] = useState<WorkbenchMode>('code')
   const [selectedId, setSelectedId] = useState<string>()
-  const [phaseEdit, setPhaseEdit] = useState('')
+  const [phaseEdit, setPhaseEdit] = useState<{ nodeId?: string; value: string }>({ value: '' })
   const [phaseError, setPhaseError] = useState('')
   const [showExport, setShowExport] = useState(false)
   const [exportFormat, setExportFormat] = useState<ExportFormat>('qollab')
@@ -37,11 +37,7 @@ function App() {
   }), [baseGraph, positions])
   const selectedNode = graph.nodes.find((node) => node.id === selectedId)
 
-  useEffect(() => {
-    setPhaseEdit(selectedNode?.phase ?? '')
-    setPhaseError('')
-  }, [selectedId, selectedNode?.phase])
-
+  const phaseValue = phaseEdit.nodeId === selectedId ? phaseEdit.value : selectedNode?.phase ?? ''
   const updateSource = (value: string) => {
     setSource(value)
     setPositions({})
@@ -76,8 +72,8 @@ function App() {
   }
   const updatePhase = () => {
     if (!result.circuit || !selectedNode?.gateId || (selectedNode.kind !== 'z' && selectedNode.kind !== 'x')) return
-    const normalizedPhase = phaseEdit.replaceAll('π', 'pi').trim()
-    const name = selectedNode.kind === 'z' ? 'rz' : 'rx'
+    const normalizedPhase = phaseValue.replaceAll('π', 'pi').trim()
+    const name: GateName = selectedNode.kind === 'z' ? 'rz' : 'rx'
     const gates = result.circuit.gates.map((gate) => gate.id === selectedNode.gateId
       ? { ...gate, name, parameter: normalizedPhase } : gate)
     const nextSource = toQasm({ ...result.circuit, gates })
@@ -88,6 +84,8 @@ function App() {
     }
     updateSource(nextSource)
     setSelectedId(`${selectedNode.gateId}-q${selectedNode.wire}-${selectedNode.kind}`)
+    setPhaseEdit({ nodeId: `${selectedNode.gateId}-q${selectedNode.wire}-${selectedNode.kind}`, value: normalizedPhase })
+    setPhaseError('')
   }
   const moveNode = (id: string, position: Vector3) => setPositions((current) => ({ ...current, [id]: position }))
   const exportText = !result.circuit ? '' : ({
@@ -164,7 +162,7 @@ function App() {
         <aside className="right-panel">
           <div className="view-title"><div><span className="eyebrow">LIVE GRAPH</span><h2>3D spider inspector</h2></div><span className="live-dot">●</span></div>
           <div className="preview-frame">
-            {result.circuit && <Spider3DCanvasView graph={graph} selectedId={selectedId} onSelect={setSelectedId} onMove={moveNode} />}
+            {result.circuit && <Spider3DCanvasView graph={graph} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setPhaseError('') }} onMove={moveNode} />}
             <div className="preview-controls"><span>DRAG TO ORBIT</span><span>{graph.nodes.filter((node) => node.kind !== 'boundary').length} SPIDERS</span></div>
           </div>
           <div className="inspector">
@@ -174,7 +172,7 @@ function App() {
               <div className="property-row"><span>Qubit wire</span><code>q[{selectedNode.wire}]</code></div>
               <div className="property-row"><span>3D position</span><code>{selectedNode.position.x.toFixed(1)}, {selectedNode.position.y.toFixed(1)}, {selectedNode.position.z.toFixed(1)}</code></div>
               {selectedNode.kind === 'x' || selectedNode.kind === 'z' ? <div className="phase-editor">
-                <label htmlFor="phase-input">Phase</label><input id="phase-input" value={phaseEdit} onChange={(event) => setPhaseEdit(event.target.value)} aria-invalid={Boolean(phaseError)} />
+                <label htmlFor="phase-input">Phase</label><input id="phase-input" value={phaseValue} onChange={(event) => setPhaseEdit({ nodeId: selectedId, value: event.target.value })} aria-invalid={Boolean(phaseError)} />
                 <button type="button" onClick={updatePhase}>Apply</button>
                 {phaseError && <span className="phase-error">{phaseError}</span>}
               </div> : <div className="property-row"><span>Type</span><code>{selectedNode.label ?? selectedNode.kind}</code></div>}
