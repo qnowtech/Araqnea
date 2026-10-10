@@ -12,6 +12,10 @@ Araqnea is a quantum workbench that translates OpenQASM 2.0 into synchronized ga
 - Picturalism palette to the left of the spider canvas, inspired by Coecke & Kissinger's *Picturing Quantum Processes*: drag (or click/tap) Z/X spiders, phase spiders, Hadamard boxes, states, effects, wires, cups, caps, copy, XOR merge and discard symbols onto the canvas, then connect, re-phase, move, or remove them from the inspector
 - Circuit exports for OpenQASM 2.0, Qiskit Python, Qollab JavaScript, and 3D ZX graph JSON
 
+## OpenQASM support
+
+The editor accepts indexed gates `h`, `x`, `y`, `z`, `s`, `t`, `rx`, `rz`, `cx`, `cz`, and `swap`, plus indexed measurements. A circuit can have one quantum register and an optional single classical register; custom gate definitions and other OpenQASM constructs are not supported.
+
 ## Development
 
 ```bash
@@ -19,7 +23,7 @@ npm install
 npm run dev
 ```
 
-Use `npm run build` for a production build and `npm run lint` for static checks.
+Use `npm run build` for a production build, then `npm run preview` to serve that build locally. Run `npm run lint` for static checks.
 
 ## Attribution
 
