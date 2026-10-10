@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import type { ZXGraph3D, ZXNode, Vector3 } from '../../types/zx'
 
 interface Spider3DCanvasViewProps {
@@ -10,7 +11,8 @@ interface Spider3DCanvasViewProps {
   className?: string
 }
 
-const asVector = (position: Vector3) => new THREE.Vector3(position.x, position.y, position.z)
+const sceneScale = 60
+const asVector = (position: Vector3) => new THREE.Vector3(position.x, position.y, position.z).divideScalar(sceneScale)
 
 function labelSprite(node: ZXNode) {
   const canvas = document.createElement('canvas')
@@ -36,6 +38,7 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, classN
   const callbacks = useRef({ onSelect, onMove })
   const controls = useRef<{ zoom: (factor: number) => void; reset: () => void } | null>(null)
   const selectedRef = useRef(selectedId)
+  const savedView = useRef<{ projection: string; position: THREE.Vector3; target: THREE.Vector3; zoom: number } | null>(null)
   const [projection, setProjection] = useState<'3d' | '2d'>('3d')
   useEffect(() => {
     callbacks.current = { onSelect, onMove }
@@ -57,8 +60,12 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, classN
     }
     const bounds = new THREE.Box3().setFromPoints(graph.nodes.map(positionFor))
     const target = graph.nodes.length ? bounds.getCenter(new THREE.Vector3()) : new THREE.Vector3()
-    const distance = graph.nodes.length ? Math.max(12, bounds.getSize(new THREE.Vector3()).length() * 1.3) : 15
-    const frustumHeight = Math.max(8, bounds.getSize(new THREE.Vector3()).length() * 1.1)
+    const aspect = host.clientWidth / Math.max(1, host.clientHeight)
+    const size = graph.nodes.length ? bounds.getSize(new THREE.Vector3()) : new THREE.Vector3()
+    const radius = size.length() / 2 + 1.5
+    const halfFov = THREE.MathUtils.degToRad(24)
+    const distance = Math.max(12, radius / Math.sin(Math.min(halfFov, Math.atan(Math.tan(halfFov) * aspect))))
+    const frustumHeight = Math.max(8, (size.y + 3), (size.x + 3) / aspect)
     scene.fog = new THREE.Fog('#08111d', Math.max(20, distance * 0.75), Math.max(65, distance * 2.5))
     const camera = is2D
       ? new THREE.OrthographicCamera(-frustumHeight / 2, frustumHeight / 2, frustumHeight / 2, -frustumHeight / 2, 0.1, distance * 4)
@@ -67,17 +74,38 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, classN
     camera.lookAt(target)
     const initialTarget = target.clone()
     const initialPosition = camera.position.clone()
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false })
+    const navigation = new OrbitControls(camera, renderer.domElement)
+    navigation.target.copy(target)
+    navigation.enableRotate = !is2D
+    navigation.mouseButtons.LEFT = is2D ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE
+    navigation.touches.ONE = is2D ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE
+    navigation.minDistance = 2
+    navigation.maxDistance = distance * 2
+    navigation.minZoom = 0.2
+    navigation.maxZoom = 8
+    const previousView = savedView.current
+    if (previousView?.projection === projection) {
+      camera.position.copy(previousView.position)
+      navigation.target.copy(previousView.target)
+      camera.zoom = previousView.zoom
+      camera.updateProjectionMatrix()
+    }
+    navigation.update()
     controls.current = {
       zoom: (factor) => {
         if (camera instanceof THREE.OrthographicCamera) {
           camera.zoom = THREE.MathUtils.clamp(camera.zoom * factor, 0.2, 8)
           camera.updateProjectionMatrix()
         } else {
-          camera.position.sub(target).multiplyScalar(1 / factor).add(target)
+          const offset = camera.position.clone().sub(navigation.target)
+          offset.setLength(THREE.MathUtils.clamp(offset.length() / factor, navigation.minDistance, navigation.maxDistance))
+          camera.position.copy(navigation.target).add(offset)
         }
+        navigation.update()
       },
       reset: () => {
-        target.copy(initialTarget)
+        navigation.target.copy(initialTarget)
         camera.position.copy(initialPosition)
         camera.up.set(0, 1, 0)
         camera.lookAt(target)
@@ -85,9 +113,9 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, classN
           camera.zoom = 1
           camera.updateProjectionMatrix()
         }
+        navigation.update()
       },
     }
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     renderer.outputColorSpace = THREE.SRGBColorSpace
     renderer.toneMapping = THREE.ACESFilmicToneMapping
@@ -205,20 +233,17 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, classN
     const dragOffset = new THREE.Vector3()
     const dragPoint = new THREE.Vector3()
     let dragging: THREE.Mesh | undefined
-    let orbiting = false
-    let panning = false
-    let previous = { x: 0, y: 0 }
-    const spherical = new THREE.Spherical()
     const updatePointer = (event: PointerEvent) => {
       const rect = renderer.domElement.getBoundingClientRect()
       pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1)
       raycaster.setFromCamera(pointer, camera)
     }
     const down = (event: PointerEvent) => {
+      if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey) return
       updatePointer(event)
-      previous = { x: event.clientX, y: event.clientY }
       const hit = raycaster.intersectObjects(pickables, false)[0]?.object as THREE.Mesh | undefined
       if (hit) {
+        navigation.enabled = false
         const id = hit.userData.nodeId as string
         callbacks.current.onSelect(id)
         if (nodeMap.get(id)?.kind !== 'boundary') {
@@ -227,69 +252,42 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, classN
           raycaster.ray.intersectPlane(dragPlane, dragPoint)
           dragOffset.copy(hit.position).sub(dragPoint)
         }
-      } else if (event.button === 2 || event.button === 1 || event.shiftKey) {
-        panning = true
-      } else {
-        orbiting = true
+        renderer.domElement.setPointerCapture(event.pointerId)
       }
-      renderer.domElement.setPointerCapture(event.pointerId)
     }
     const move = (event: PointerEvent) => {
-      if (!dragging && !orbiting && !panning) return
-      const dx = event.clientX - previous.x
-      const dy = event.clientY - previous.y
-      previous = { x: event.clientX, y: event.clientY }
       if (dragging) {
         updatePointer(event)
         if (raycaster.ray.intersectPlane(dragPlane, dragPoint)) {
           dragging.position.copy(dragPoint.add(dragOffset))
           refreshEdges()
         }
-      } else if (orbiting) {
-        spherical.setFromVector3(camera.position.clone().sub(target))
-        spherical.theta -= dx * 0.006
-        spherical.phi = THREE.MathUtils.clamp(spherical.phi + dy * 0.006, 0.12, Math.PI - 0.12)
-        camera.position.setFromSpherical(spherical).add(target)
-        camera.lookAt(target)
-      } else {
-        const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0)
-        const up = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1)
-        target.addScaledVector(right, -dx * 0.012).addScaledVector(up, dy * 0.012)
-        camera.position.addScaledVector(right, -dx * 0.012).addScaledVector(up, dy * 0.012)
       }
     }
     const up = () => {
       if (dragging) {
         const nodeId = dragging.userData.nodeId as string
         const position = dragging.position
-        const originalZ = nodeMap.get(nodeId)?.position.z ?? position.z
-        callbacks.current.onMove(nodeId, { x: position.x, y: position.y, z: is2D ? originalZ : position.z })
+        const originalZ = nodeMap.get(nodeId)?.position.z ?? position.z * sceneScale
+        callbacks.current.onMove(nodeId, { x: position.x * sceneScale, y: position.y * sceneScale, z: is2D ? originalZ : position.z * sceneScale })
       }
       dragging = undefined
-      orbiting = false
-      panning = false
-    }
-    const wheel = (event: WheelEvent) => {
-      if (camera instanceof THREE.OrthographicCamera) {
-        camera.zoom = THREE.MathUtils.clamp(camera.zoom * (event.deltaY > 0 ? 0.92 : 1.08), 0.2, 8)
-        camera.updateProjectionMatrix()
-      } else {
-        camera.position.sub(target).multiplyScalar(event.deltaY > 0 ? 1.08 : 0.92).add(target)
-      }
+      navigation.enabled = true
     }
     const doubleClick = (event: MouseEvent) => {
       updatePointer(event as PointerEvent)
       const hit = raycaster.intersectObjects(pickables, false)[0]?.object as THREE.Mesh | undefined
       if (!hit) return
-      target.copy(hit.position)
-      camera.lookAt(target)
+      const offset = camera.position.clone().sub(navigation.target)
+      navigation.target.copy(hit.position)
+      camera.position.copy(hit.position).add(offset)
+      navigation.update()
     }
     const contextMenu = (event: Event) => event.preventDefault()
-    renderer.domElement.addEventListener('pointerdown', down)
+    renderer.domElement.addEventListener('pointerdown', down, { capture: true })
     renderer.domElement.addEventListener('pointermove', move)
     renderer.domElement.addEventListener('pointerup', up)
     renderer.domElement.addEventListener('pointercancel', up)
-    renderer.domElement.addEventListener('wheel', wheel, { passive: true })
     renderer.domElement.addEventListener('dblclick', doubleClick)
     renderer.domElement.addEventListener('contextmenu', contextMenu)
 
@@ -316,11 +314,12 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, classN
     return () => {
       cancelAnimationFrame(frame)
       observer.disconnect()
-      renderer.domElement.removeEventListener('pointerdown', down)
+      savedView.current = { projection, position: camera.position.clone(), target: navigation.target.clone(), zoom: camera.zoom }
+      navigation.dispose()
+      renderer.domElement.removeEventListener('pointerdown', down, { capture: true })
       renderer.domElement.removeEventListener('pointermove', move)
       renderer.domElement.removeEventListener('pointerup', up)
       renderer.domElement.removeEventListener('pointercancel', up)
-      renderer.domElement.removeEventListener('wheel', wheel)
       renderer.domElement.removeEventListener('dblclick', doubleClick)
       renderer.domElement.removeEventListener('contextmenu', contextMenu)
       controls.current = null
@@ -353,6 +352,6 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, classN
         {projection === '3d' ? '2D' : '3D'}
       </button>
     </div>
-    <div className="canvas-hint">{projection === '3d' ? 'DRAG ORBIT · SHIFT/RIGHT-DRAG PAN' : 'DRAG ROTATE · SHIFT/RIGHT-DRAG PAN'} · SCROLL ZOOM</div>
+    <div className="canvas-hint">{projection === '3d' ? 'DRAG ORBIT · SHIFT/RIGHT-DRAG PAN' : 'DRAG PAN'} · SCROLL/PINCH ZOOM · DOUBLE-CLICK FOCUS</div>
   </div>
 }
