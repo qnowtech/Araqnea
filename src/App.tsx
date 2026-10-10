@@ -1,75 +1,214 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { examples } from './data/examples'
+import { CodeView } from './components/views/CodeView'
+import { GateCircuitView } from './components/views/GateCircuitView'
+import { Spider3DCanvasView } from './components/views/Spider3DCanvasView'
+import { toQasm, toQiskitPython, toZXJson } from './lib/exporters/circuitExporters'
 import { toQollabJs } from './lib/exporters/qollabExporter'
 import { parseQasm } from './lib/parsers/qasm2Parser'
 import { translateCircuit } from './lib/zx-core/translator'
-import type { GateName } from './types/circuit'
+import type { GateName, QuantumCircuit } from './types/circuit'
+import type { Vector3 } from './types/zx'
 
-const palette: { name: GateName; label: string }[] = [
-  { name: 'h', label: 'H' }, { name: 'x', label: 'X' }, { name: 'z', label: 'Z' },
-  { name: 's', label: 'S' }, { name: 't', label: 'T' }, { name: 'rx', label: 'Rx' },
-  { name: 'rz', label: 'Rz' }, { name: 'cx', label: 'CNOT' }, { name: 'cz', label: 'CZ' },
+type WorkbenchMode = 'code' | 'gates' | 'spiders'
+type ExportFormat = 'qollab' | 'qasm' | 'qiskit' | 'zx'
+
+const modeLabels: { id: WorkbenchMode; label: string; icon: string }[] = [
+  { id: 'code', label: 'Code', icon: '⌘' },
+  { id: 'gates', label: 'Circuit gates', icon: '▦' },
+  { id: 'spiders', label: '3D spiders', icon: '◉' },
 ]
 
 function App() {
   const [source, setSource] = useState<string>(examples['Bell state'])
-  const [selected, setSelected] = useState<string>()
+  const [mode, setMode] = useState<WorkbenchMode>('code')
+  const [selectedId, setSelectedId] = useState<string>()
+  const [phaseEdit, setPhaseEdit] = useState('')
+  const [phaseError, setPhaseError] = useState('')
   const [showExport, setShowExport] = useState(false)
+  const [exportFormat, setExportFormat] = useState<ExportFormat>('qollab')
+  const [copied, setCopied] = useState(false)
+  const [positions, setPositions] = useState<Record<string, Vector3>>({})
   const result = useMemo(() => parseQasm(source), [source])
-  const graph = useMemo(() => result.circuit ? translateCircuit(result.circuit) : { nodes: [], edges: [] }, [result.circuit])
-  const maxX = Math.max(...graph.nodes.map((node) => node.x), 300) + 70
-  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]))
+  const baseGraph = useMemo(() => result.circuit ? translateCircuit(result.circuit) : { nodes: [], edges: [] }, [result.circuit])
+  const graph = useMemo(() => ({
+    ...baseGraph,
+    nodes: baseGraph.nodes.map((node) => positions[node.id] ? { ...node, position: positions[node.id] } : node),
+  }), [baseGraph, positions])
+  const selectedNode = graph.nodes.find((node) => node.id === selectedId)
 
-  const addGate = (gate: GateName) => {
-    const instruction = gate === 'cx' || gate === 'cz' ? `${gate} q[0],q[1];` : `${gate === 'rx' || gate === 'rz' ? `${gate}(pi/2)` : gate} q[0];`
-    setSource((current) => current.replace(/(measure[\s\S]*|$)/, `${instruction}\n$1`))
+  useEffect(() => {
+    setPhaseEdit(selectedNode?.phase ?? '')
+    setPhaseError('')
+  }, [selectedId, selectedNode?.phase])
+
+  const updateSource = (value: string) => {
+    setSource(value)
+    setPositions({})
+  }
+  const updateCircuit = (circuit: QuantumCircuit) => updateSource(toQasm(circuit))
+  const addGate = (name: GateName, wire: number) => {
+    if (!result.circuit) return
+    const multiQubit = name === 'cx' || name === 'cz' || name === 'swap'
+    const qubits = Math.max(result.circuit.qubits, wire + 1, multiQubit ? 2 : 1)
+    const targetWire = Math.min(wire, qubits - 1)
+    const gateQubits = multiQubit
+      ? [targetWire === 0 ? 0 : 0, targetWire === 0 ? 1 : targetWire]
+      : [targetWire]
+    const gate = {
+      id: `new-${Date.now()}-${result.circuit.gates.length}`,
+      name,
+      qubits: gateQubits,
+      ...(['rx', 'rz'].includes(name) ? { parameter: 'pi/2' } : {}),
+      ...(name === 'measure' ? { classicalBit: targetWire } : {}),
+    }
+    updateCircuit({
+      ...result.circuit,
+      qubits,
+      classicalBits: Math.max(result.circuit.classicalBits, name === 'measure' ? targetWire + 1 : 0),
+      gates: [...result.circuit.gates, gate],
+    })
+  }
+  const removeGate = (gateId: string) => {
+    if (!result.circuit) return
+    updateCircuit({ ...result.circuit, gates: result.circuit.gates.filter((gate) => gate.id !== gateId) })
+    if (selectedNode?.gateId === gateId) setSelectedId(undefined)
+  }
+  const updatePhase = () => {
+    if (!result.circuit || !selectedNode?.gateId || (selectedNode.kind !== 'z' && selectedNode.kind !== 'x')) return
+    const normalizedPhase = phaseEdit.replaceAll('π', 'pi').trim()
+    const name = selectedNode.kind === 'z' ? 'rz' : 'rx'
+    const gates = result.circuit.gates.map((gate) => gate.id === selectedNode.gateId
+      ? { ...gate, name, parameter: normalizedPhase } : gate)
+    const nextSource = toQasm({ ...result.circuit, gates })
+    const nextResult = parseQasm(nextSource)
+    if (!nextResult.circuit) {
+      setPhaseError(nextResult.error ?? 'Invalid phase.')
+      return
+    }
+    updateSource(nextSource)
+    setSelectedId(`${selectedNode.gateId}-q${selectedNode.wire}-${selectedNode.kind}`)
+  }
+  const moveNode = (id: string, position: Vector3) => setPositions((current) => ({ ...current, [id]: position }))
+  const exportText = !result.circuit ? '' : ({
+    qollab: toQollabJs(result.circuit),
+    qasm: toQasm(result.circuit),
+    qiskit: toQiskitPython(result.circuit),
+    zx: toZXJson(graph),
+  })[exportFormat]
+  const exportName = ({ qollab: 'main.js', qasm: 'circuit.qasm', qiskit: 'circuit.py', zx: 'zx-graph.json' })[exportFormat]
+
+  const download = (name: string, text: string, type: string) => {
+    const url = URL.createObjectURL(new Blob([text], { type }))
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = name
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
+  const downloadExport = () => {
+    if (exportFormat === 'qollab') {
+      download('main.js', exportText, 'text/javascript')
+      download('index.html', '<!doctype html>\n<html><head><meta charset="utf-8"><title>Araqnea circuit</title></head><body><pre id="results"></pre><script type="module" src="./main.js"></script></body></html>', 'text/html')
+    } else {
+      download(exportName, exportText, exportFormat === 'zx' ? 'application/json' : 'text/plain')
+    }
+  }
+  const copyExport = async () => {
+    try {
+      await navigator.clipboard.writeText(exportText)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    } catch {
+      setCopied(false)
+    }
   }
 
   return (
     <main className="app-shell">
       <header>
-        <div className="brand"><span className="brand-mark">⌬</span><span>Araqnea</span><small>ZX Studio</small></div>
-        <nav><button type="button">Documentation</button><button type="button" onClick={() => setShowExport(true)}>Export ↗</button><button className="run" type="button">▶ Run simulation</button></nav>
+        <a className="brand" href="/" aria-label="Araqnea home"><span className="brand-mark">⌬</span><span>Araqnea</span><small>QUANTUM WORKBENCH</small></a>
+        <nav>
+          <span className="header-status"><i /> LIVE SYNC</span>
+          <button type="button" onClick={() => setShowExport(true)}>Export <span aria-hidden="true">↗</span></button>
+          <button className="run" type="button" onClick={() => setMode('gates')}>▶ Run circuit</button>
+        </nav>
       </header>
       <section className="workspace">
-        <aside className="editor-panel">
-          <div className="panel-heading"><div><span className="eyebrow">CIRCUIT INPUT</span><h1>OpenQASM 2.0</h1></div><span className={`status ${result.error ? 'error' : ''}`}>{result.error ?? '● Valid circuit'}</span></div>
-          <div className="controls">
-            <label>Example
-              <select value="" onChange={(event) => setSource(examples[event.target.value as keyof typeof examples])}>
-                <option value="" disabled>Load a preset…</option>
-                {Object.keys(examples).map((name) => <option key={name} value={name}>{name}</option>)}
-              </select>
-            </label>
-            <span className="qubit-count">{result.circuit?.qubits ?? 0} qubits</span>
+        <section className="left-workbench">
+          <div className="workbench-top">
+            <div><span className="eyebrow">QUANTUM WORKSPACE</span><h1>Untitled circuit</h1></div>
+            <span className={`status ${result.error ? 'error' : ''}`}>{result.error ?? '● Synced'}</span>
           </div>
-          <div className="palette" aria-label="Gate palette">{palette.map((gate) => <button key={gate.name} type="button" onClick={() => addGate(gate.name)}>{gate.label}</button>)}</div>
-          <textarea aria-label="OpenQASM editor" spellCheck="false" value={source} onChange={(event) => setSource(event.target.value)} />
-          <p className="editor-hint">Live parsing is enabled. Choose a preset or use the gate palette to build your circuit.</p>
-        </aside>
-        <section className="diagram-panel">
-          <div className="panel-heading"><div><span className="eyebrow">QUANTUM PICTURES</span><h2>ZX-calculus diagram</h2></div><div className="canvas-actions"><button type="button">−</button><button type="button">+</button><button type="button">Fit view</button></div></div>
-          <div className="legend"><span><i className="z-dot" /> Z-spider</span><span><i className="x-dot" /> X-spider</span><span><i className="h-line" /> Hadamard edge</span></div>
-          <div className="canvas">
-            {result.error ? <div className="empty-state">Fix the circuit syntax to view its diagram.</div> :
-              <svg viewBox={`0 0 ${maxX} ${Math.max(280, result.circuit!.qubits * 100 + 90)}`} role="img" aria-label="ZX calculus circuit diagram">
-                {graph.edges.map((edge) => {
-                  const from = nodeById.get(edge.source)!
-                  const to = nodeById.get(edge.target)!
-                  return <g key={edge.id}><line className={edge.hadamard ? 'hadamard-edge' : 'edge'} x1={from.x} y1={from.y} x2={to.x} y2={to.y} />{edge.hadamard && <rect className="h-box" x={(from.x + to.x) / 2 - 10} y={(from.y + to.y) / 2 - 10} width="20" height="20" rx="3" />}</g>
-                })}
-                {graph.nodes.map((node) => node.kind === 'boundary'
-                  ? <g className="boundary" key={node.id}><text x={node.x} y={node.y + 5} textAnchor="middle">{node.label}</text></g>
-                  : <g key={node.id} className={`spider ${node.kind}`} onClick={() => setSelected(node.id)}><circle cx={node.x} cy={node.y} r="25" /><text x={node.x} y={node.y + 5} textAnchor="middle">{node.phase}</text></g>
-                )}
-              </svg>}
+          <div className="mode-tabs" role="tablist" aria-label="Workbench mode">
+            {modeLabels.map((item) => <button
+              key={item.id}
+              type="button"
+              role="tab"
+              aria-selected={mode === item.id}
+              className={mode === item.id ? 'active' : ''}
+              onClick={() => setMode(item.id)}
+            ><span>{item.icon}</span>{item.label}</button>)}
           </div>
-          <div className="inspector">{selected ? (() => { const node = nodeById.get(selected)!; return <><b>Spider inspector</b><span>{node.kind.toUpperCase()} spider · wire {node.wire}</span><span>Phase: {node.phase} ({node.phase === 'π/2' ? '90°' : node.phase === 'π' ? '180°' : '0°'})</span></> })() : <><b>Spider inspector</b><span>Select a colored node to inspect its phase and wire.</span></>}</div>
+          {!result.circuit
+            ? <div className="mode-content empty-state">Fix the OpenQASM syntax to edit this circuit.</div>
+            : mode === 'code'
+              ? <CodeView source={source} error={result.error} qubits={result.circuit.qubits} onChange={updateSource} onPreset={updateSource} />
+              : mode === 'gates'
+                ? <GateCircuitView circuit={result.circuit} onAdd={addGate} onRemove={removeGate} />
+                : <section className="mode-content active-spider-view">
+                    <div className="view-title"><div><span className="eyebrow">MODE 03 · ZX GRAPH</span><h2>Spatial spider canvas</h2></div><span>Drag nodes · orbit · pan · zoom</span></div>
+                    <Spider3DCanvasView graph={graph} selectedId={selectedId} onSelect={setSelectedId} onMove={moveNode} />
+                  </section>}
         </section>
+        <aside className="right-panel">
+          <div className="view-title"><div><span className="eyebrow">LIVE GRAPH</span><h2>3D spider inspector</h2></div><span className="live-dot">●</span></div>
+          <div className="preview-frame">
+            {result.circuit && <Spider3DCanvasView graph={graph} selectedId={selectedId} onSelect={setSelectedId} onMove={moveNode} />}
+            <div className="preview-controls"><span>DRAG TO ORBIT</span><span>{graph.nodes.filter((node) => node.kind !== 'boundary').length} SPIDERS</span></div>
+          </div>
+          <div className="inspector">
+            <div className="inspector-heading"><b>Selected node</b>{selectedNode && <span className={`node-tag ${selectedNode.kind}`}>{selectedNode.kind.toUpperCase()}</span>}</div>
+            {selectedNode ? <>
+              <div className="property-row"><span>Node ID</span><code>{selectedNode.id}</code></div>
+              <div className="property-row"><span>Qubit wire</span><code>q[{selectedNode.wire}]</code></div>
+              <div className="property-row"><span>3D position</span><code>{selectedNode.position.x.toFixed(1)}, {selectedNode.position.y.toFixed(1)}, {selectedNode.position.z.toFixed(1)}</code></div>
+              {selectedNode.kind === 'x' || selectedNode.kind === 'z' ? <div className="phase-editor">
+                <label htmlFor="phase-input">Phase</label><input id="phase-input" value={phaseEdit} onChange={(event) => setPhaseEdit(event.target.value)} aria-invalid={Boolean(phaseError)} />
+                <button type="button" onClick={updatePhase}>Apply</button>
+                {phaseError && <span className="phase-error">{phaseError}</span>}
+              </div> : <div className="property-row"><span>Type</span><code>{selectedNode.label ?? selectedNode.kind}</code></div>}
+              <div className="property-row"><span>Connected edges</span><code>{graph.edges.filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id).length}</code></div>
+            </> : <p className="inspector-placeholder">Select a spider in either graph to inspect its phase and spatial position.</p>}
+          </div>
+          <div className="graph-legend"><span><i className="z-dot" /> Z spider</span><span><i className="x-dot" /> X spider</span><span><i className="h-dot" /> Hadamard</span></div>
+        </aside>
       </section>
-      <section className="results"><div><span className="eyebrow">BUILT-IN LOCAL SIMULATOR</span><h2>Measurement probabilities</h2></div><div className="bars"><span><i style={{ height: '50%' }} />00 <b>50%</b></span><span><i style={{ height: '0%' }} />01 <b>0%</b></span><span><i style={{ height: '0%' }} />10 <b>0%</b></span><span><i style={{ height: '50%' }} />11 <b>50%</b></span></div></section>
-      <footer>This effort is supported by <strong>Qollab &amp; IonQ</strong><span>•</span> Built for Quantum Unlocked</footer>
-      {showExport && result.circuit && <div className="modal-backdrop" role="presentation" onClick={() => setShowExport(false)}><section className="modal" role="dialog" aria-modal="true" aria-label="Export Qollab project" onClick={(event) => event.stopPropagation()}><div><span className="eyebrow">QOLLAB EXPORT</span><h2>Ready to run in the browser</h2></div><pre>{toQollabJs(result.circuit)}</pre><button className="copy" type="button" onClick={() => navigator.clipboard.writeText(toQollabJs(result.circuit!))}>Copy main.js</button><button className="close" type="button" onClick={() => setShowExport(false)}>Close</button></section></div>}
+      <section className="results">
+        <div><span className="eyebrow">CIRCUIT OVERVIEW</span><h2>Quantum circuit</h2></div>
+        <div className="result-stats">
+          <span><b>{result.circuit?.qubits ?? 0}</b> QUBITS</span>
+          <span><b>{result.circuit?.gates.length ?? 0}</b> GATES</span>
+          <span><b>{graph.edges.length}</b> WIRES</span>
+          <button type="button" onClick={() => setShowExport(true)}>Export circuit ↗</button>
+        </div>
+      </section>
+      <footer>Araqnea <span>·</span> ZX-calculus workbench <span>·</span> Built for quantum engineering</footer>
+      {showExport && result.circuit && <div className="modal-backdrop" role="presentation" onClick={() => setShowExport(false)}>
+        <section className="modal" role="dialog" aria-modal="true" aria-label="Export circuit" onClick={(event) => event.stopPropagation()}>
+          <div className="modal-heading"><div><span className="eyebrow">MULTI-FORMAT EXPORT</span><h2>Take your circuit anywhere</h2></div><button className="close" type="button" onClick={() => setShowExport(false)} aria-label="Close export">×</button></div>
+          <label className="export-select">Format
+            <select value={exportFormat} onChange={(event) => setExportFormat(event.target.value as ExportFormat)}>
+              <option value="qollab">Qollab browser project (main.js + index.html)</option>
+              <option value="qasm">OpenQASM 2.0 (.qasm)</option>
+              <option value="qiskit">Qiskit Python (.py)</option>
+              <option value="zx">3D ZX graph (.json)</option>
+            </select>
+          </label>
+          <pre>{exportText}</pre>
+          <div className="export-actions"><button className="copy" type="button" onClick={() => void copyExport()}>{copied ? 'Copied!' : 'Copy'}</button><button className="download" type="button" onClick={downloadExport}>Download {exportFormat === 'qollab' ? 'project files' : exportName}</button></div>
+        </section>
+      </div>}
     </main>
   )
 }
