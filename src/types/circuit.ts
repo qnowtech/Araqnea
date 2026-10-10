@@ -5,6 +5,7 @@ export interface CircuitGate {
   name: GateName
   qubits: number[]
   parameter?: string
+  classicalBit?: number
 }
 
 export interface QuantumCircuit {

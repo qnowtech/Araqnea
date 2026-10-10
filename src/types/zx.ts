@@ -1,4 +1,10 @@
-export type SpiderKind = 'z' | 'x' | 'boundary'
+export type SpiderKind = 'z' | 'x' | 'boundary' | 'hadamard'
+
+export interface Vector3 {
+  x: number
+  y: number
+  z: number
+}
 
 export interface ZXNode {
   id: string
@@ -6,8 +12,8 @@ export interface ZXNode {
   phase: string
   wire: number
   label?: string
-  x: number
-  y: number
+  gateId?: string
+  position: Vector3
 }
 
 export interface ZXEdge {
@@ -17,7 +23,7 @@ export interface ZXEdge {
   hadamard?: boolean
 }
 
-export interface ZXGraph {
+export interface ZXGraph3D {
   nodes: ZXNode[]
   edges: ZXEdge[]
 }
