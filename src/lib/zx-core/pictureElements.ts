@@ -21,7 +21,7 @@ export interface PictureElement {
 export const pictureElements: PictureElement[] = [
   { id: 'z-spider', label: 'Z spider', group: 'Generators', description: 'Green (Z) spider with phase 0' },
   { id: 'x-spider', label: 'X spider', group: 'Generators', description: 'Red (X) spider with phase 0' },
-  { id: 'z-phase', label: 'Z phase α', group: 'Generators', description: 'Z spider carrying a π/2 phase' },
+  { id: 'z-phase', label: 'Z phase π/2', group: 'Generators', description: 'Z spider carrying a π/2 phase' },
   { id: 'x-phase', label: 'X phase π', group: 'Generators', description: 'X spider carrying a π phase (NOT)' },
   { id: 'hadamard', label: 'Hadamard', group: 'Generators', description: 'Hadamard box' },
   { id: 'state-zero', label: 'State |0⟩', group: 'States & effects', description: 'X spider state with one output wire' },

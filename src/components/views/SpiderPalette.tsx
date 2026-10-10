@@ -14,13 +14,13 @@ const wire = '#9fb4c8'
 
 const line = (x1: number, y1: number, x2: number, y2: number) => <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={wire} strokeWidth="2" strokeLinecap="round" />
 const dot = (cx: number, cy: number, fill: string, r = 7) => <circle cx={cx} cy={cy} r={r} fill={fill} stroke="#08111d" strokeWidth="1.5" />
-const phase = (text: string) => <text x="20" y="11" textAnchor="middle" fill="#e7f1fa" fontSize="11" fontFamily="monospace">{text}</text>
+const phase = (text: string) => <text x="20" y="11" textAnchor="middle" fill="#e7f1fa" fontSize={text.length > 1 ? 9 : 11} fontFamily="monospace">{text}</text>
 const triangle = (points: string, fill: string) => <polygon points={points} fill={fill} fillOpacity="0.2" stroke={fill} strokeWidth="1.6" strokeLinejoin="round" />
 
 const icons: Record<PictureElementId, ReactElement> = {
   'z-spider': <>{line(4, 20, 36, 20)}{dot(20, 20, z)}</>,
   'x-spider': <>{line(4, 20, 36, 20)}{dot(20, 20, x)}</>,
-  'z-phase': <>{line(4, 26, 36, 26)}{dot(20, 26, z)}{phase('α')}</>,
+  'z-phase': <>{line(4, 26, 36, 26)}{dot(20, 26, z)}{phase('π/2')}</>,
   'x-phase': <>{line(4, 26, 36, 26)}{dot(20, 26, x)}{phase('π')}</>,
   hadamard: <>{line(4, 20, 36, 20)}<rect x="13" y="13" width="14" height="14" rx="1.5" fill={h} stroke="#08111d" /></>,
   'state-zero': <>{triangle('8,10 8,30 22,20', x)}{line(22, 20, 36, 20)}{dot(13, 20, x, 4)}</>,

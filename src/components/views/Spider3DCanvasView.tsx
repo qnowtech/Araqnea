@@ -378,7 +378,9 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onDrop
         event.dataTransfer.dropEffect = 'copy'
         setDropActive(true)
       }}
-      onDragLeave={() => setDropActive(false)}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropActive(false)
+      }}
       onDrop={(event) => {
         setDropActive(false)
         const elementId = event.dataTransfer.getData(pictureElementMime)

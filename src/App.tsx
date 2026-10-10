@@ -49,6 +49,7 @@ function App() {
     }
   }, [baseGraph, positions, added])
   const selectedNode = graph.nodes.find((node) => node.id === selectedId)
+  const connectOptions = selectedNode ? graph.nodes.filter((node) => node.id !== selectedNode.id && (selectedNode.custom || node.custom)) : []
   const addedElementCount = new Set(added.nodes.map((node) => node.id.split('-')[0])).size
 
   const phaseValue = phaseEdit.nodeId === selectedId ? phaseEdit.value : selectedNode?.phase ?? ''
@@ -228,16 +229,16 @@ function App() {
                 {phaseError && <span className="phase-error">{phaseError}</span>}
               </div> : <div className="property-row"><span>Type</span><code>{selectedNode.label ?? selectedNode.kind}</code></div>}
               <div className="property-row"><span>Connected edges</span><code>{graph.edges.filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id).length}</code></div>
-              <div className="connect-editor">
+              {connectOptions.length > 0 && <div className="connect-editor">
                 <label htmlFor="connect-target">Connect to</label>
                 <select id="connect-target" value={connectTarget} onChange={(event) => setConnectTarget(event.target.value)}>
                   <option value="">Choose a node…</option>
-                  {graph.nodes.filter((node) => node.id !== selectedNode.id).map((node) => <option key={node.id} value={node.id}>
+                  {connectOptions.map((node) => <option key={node.id} value={node.id}>
                     {node.kind.toUpperCase()} {node.kind === 'boundary' ? node.label : node.phase} · {node.id}
                   </option>)}
                 </select>
                 <button type="button" disabled={!connectTarget} onClick={() => connectNodes(selectedNode.id, connectTarget)}>Connect</button>
-              </div>
+              </div>}
               {selectedNode.custom && <button type="button" className="remove-node" onClick={() => removeAddedNode(selectedNode.id)}>Remove element</button>}
             </> : <p className="inspector-placeholder">Select a spider to inspect its phase, connections, and spatial position.</p>}
           </div>
