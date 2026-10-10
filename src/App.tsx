@@ -1,14 +1,16 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { examples } from './data/examples'
 import { CodeView } from './components/views/CodeView'
 import { GateCircuitView } from './components/views/GateCircuitView'
-import { Spider3DCanvasView } from './components/views/Spider3DCanvasView'
+import { Spider3DCanvasView, type SpiderCanvasApi } from './components/views/Spider3DCanvasView'
+import { SpiderPalette } from './components/views/SpiderPalette'
 import { toQasm, toQiskitPython, toZXJson } from './lib/exporters/circuitExporters'
 import { toQollabJs } from './lib/exporters/qollabExporter'
 import { parseQasm } from './lib/parsers/qasm2Parser'
+import { buildPictureElement, pictureElements, type PictureElementId } from './lib/zx-core/pictureElements'
 import { translateCircuit } from './lib/zx-core/translator'
 import type { GateName, QuantumCircuit } from './types/circuit'
-import type { Vector3 } from './types/zx'
+import type { Vector3, ZXGraph3D } from './types/zx'
 
 type WorkbenchMode = 'code' | 'gates' | 'spiders'
 type ExportFormat = 'qollab' | 'qasm' | 'qiskit' | 'zx'
@@ -29,13 +31,26 @@ function App() {
   const [exportFormat, setExportFormat] = useState<ExportFormat>('qollab')
   const [copied, setCopied] = useState(false)
   const [positions, setPositions] = useState<Record<string, Vector3>>({})
+  const [added, setAdded] = useState<ZXGraph3D>({ nodes: [], edges: [] })
+  const [connectTarget, setConnectTarget] = useState('')
+  const addedCounter = useRef(0)
+  const canvasApi = useRef<SpiderCanvasApi>(null)
   const result = useMemo(() => parseQasm(source), [source])
   const baseGraph = useMemo(() => result.circuit ? translateCircuit(result.circuit) : { nodes: [], edges: [] }, [result.circuit])
-  const graph = useMemo(() => ({
-    ...baseGraph,
-    nodes: baseGraph.nodes.map((node) => positions[node.id] ? { ...node, position: positions[node.id] } : node),
-  }), [baseGraph, positions])
+  const graph = useMemo(() => {
+    const nodes = [
+      ...baseGraph.nodes.map((node) => positions[node.id] ? { ...node, position: positions[node.id] } : node),
+      ...added.nodes,
+    ]
+    const ids = new Set(nodes.map((node) => node.id))
+    return {
+      nodes,
+      edges: [...baseGraph.edges, ...added.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target))],
+    }
+  }, [baseGraph, positions, added])
   const selectedNode = graph.nodes.find((node) => node.id === selectedId)
+  const connectOptions = selectedNode ? graph.nodes.filter((node) => node.id !== selectedNode.id && (selectedNode.custom || node.custom)) : []
+  const addedElementCount = new Set(added.nodes.map((node) => node.id.split('-')[0])).size
 
   const phaseValue = phaseEdit.nodeId === selectedId ? phaseEdit.value : selectedNode?.phase ?? ''
   const updateSource = (value: string) => {
@@ -70,7 +85,40 @@ function App() {
     updateCircuit({ ...result.circuit, gates: result.circuit.gates.filter((gate) => gate.id !== gateId) })
     if (selectedNode?.gateId === gateId) setSelectedId(undefined)
   }
+  const addPictureElement = (elementId: PictureElementId, at?: Vector3) => {
+    addedCounter.current += 1
+    const index = addedCounter.current
+    const centre = canvasApi.current?.centerPoint() ?? { x: 0, y: 0, z: 0 }
+    const position = at ?? { x: centre.x + ((index % 5) - 2) * 25, y: centre.y + ((index % 3) - 1) * 25, z: centre.z }
+    const element = buildPictureElement(elementId, position, `pic${index}-${elementId}`)
+    setAdded((current) => ({ nodes: [...current.nodes, ...element.nodes], edges: [...current.edges, ...element.edges] }))
+    const focus = element.nodes.find((node) => node.kind !== 'boundary') ?? element.nodes[0]
+    setSelectedId(focus.id)
+    setPhaseError('')
+  }
+  const removeAddedNode = (nodeId: string) => {
+    setAdded((current) => ({
+      nodes: current.nodes.filter((node) => node.id !== nodeId),
+      edges: current.edges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId),
+    }))
+    setSelectedId(undefined)
+  }
+  const connectNodes = (source: string, target: string) => {
+    if (!target || source === target) return
+    setAdded((current) => ({
+      ...current,
+      edges: [...current.edges, { id: `pic-edge-${Date.now()}-${current.edges.length}`, source, target, custom: true }],
+    }))
+    setConnectTarget('')
+  }
   const updatePhase = () => {
+    if (selectedNode?.custom) {
+      const phase = phaseValue.replaceAll('pi', 'π').trim() || '0'
+      setAdded((current) => ({ ...current, nodes: current.nodes.map((node) => node.id === selectedNode.id ? { ...node, phase } : node) }))
+      setPhaseEdit({ nodeId: selectedNode.id, value: phase })
+      setPhaseError('')
+      return
+    }
     if (!result.circuit || !selectedNode?.gateId || (selectedNode.kind !== 'z' && selectedNode.kind !== 'x')) return
     const normalizedPhase = phaseValue.replaceAll('π', 'pi').trim()
     const name: GateName = selectedNode.kind === 'z' ? 'rz' : 'rx'
@@ -87,7 +135,13 @@ function App() {
     setPhaseEdit({ nodeId: `${selectedNode.gateId}-q${selectedNode.wire}-${selectedNode.kind}`, value: normalizedPhase })
     setPhaseError('')
   }
-  const moveNode = (id: string, position: Vector3) => setPositions((current) => ({ ...current, [id]: position }))
+  const moveNode = (id: string, position: Vector3) => {
+    if (added.nodes.some((node) => node.id === id)) {
+      setAdded((current) => ({ ...current, nodes: current.nodes.map((node) => node.id === id ? { ...node, position } : node) }))
+    } else {
+      setPositions((current) => ({ ...current, [id]: position }))
+    }
+  }
   const exportText = !result.circuit ? '' : ({
     qollab: toQollabJs(result.circuit),
     qasm: toQasm(result.circuit),
@@ -155,14 +209,19 @@ function App() {
               : mode === 'gates'
                 ? <GateCircuitView circuit={result.circuit} onAdd={addGate} onRemove={removeGate} />
                 : <section className="mode-content active-spider-view">
-                    <div className="view-title"><div><span className="eyebrow">MODE 03 · ZX GRAPH</span><h2>Spatial spider canvas</h2></div><span>Drag nodes · orbit · pan · zoom</span></div>
-                    <Spider3DCanvasView graph={graph} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setPhaseError('') }} onMove={moveNode} />
+                    <div className="view-title"><div><span className="eyebrow">MODE 03 · ZX GRAPH</span><h2>Spatial spider canvas</h2></div><span>Drag symbols in · drag nodes · orbit · pan · zoom</span></div>
+                    <div className="spider-stage">
+                      <SpiderPalette onAdd={(id) => addPictureElement(id)} onClear={() => { setAdded({ nodes: [], edges: [] }); if (selectedNode?.custom) setSelectedId(undefined) }} addedCount={addedElementCount} />
+                      <Spider3DCanvasView graph={graph} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setPhaseError(''); setConnectTarget('') }} onMove={moveNode} onDropElement={addPictureElement} apiRef={canvasApi} />
+                    </div>
                     <div className="graph-legend"><span><i className="z-dot" /> Z spider</span><span><i className="x-dot" /> X spider</span><span><i className="h-dot" /> Hadamard</span><span>{graph.nodes.filter((node) => node.kind !== 'boundary').length} SPIDERS · {graph.edges.length} CONNECTIONS</span></div>
           <div className="inspector">
             <div className="inspector-heading"><b>Selected node</b>{selectedNode && <span className={`node-tag ${selectedNode.kind}`}>{selectedNode.kind.toUpperCase()}</span>}</div>
             {selectedNode ? <>
               <div className="property-row"><span>Node ID</span><code>{selectedNode.id}</code></div>
-              <div className="property-row"><span>Qubit wire</span><code>q[{selectedNode.wire}]</code></div>
+              {selectedNode.custom
+                ? <div className="property-row"><span>Picturalism symbol</span><code>{pictureElements.find((element) => element.id === selectedNode.symbol)?.label ?? selectedNode.symbol}</code></div>
+                : <div className="property-row"><span>Qubit wire</span><code>q[{selectedNode.wire}]</code></div>}
               <div className="property-row"><span>3D position</span><code>{selectedNode.position.x.toFixed(1)}, {selectedNode.position.y.toFixed(1)}, {selectedNode.position.z.toFixed(1)}</code></div>
               {selectedNode.kind === 'x' || selectedNode.kind === 'z' ? <div className="phase-editor">
                 <label htmlFor="phase-input">Phase</label><input id="phase-input" value={phaseValue} onChange={(event) => setPhaseEdit({ nodeId: selectedId, value: event.target.value })} aria-invalid={Boolean(phaseError)} />
@@ -170,6 +229,17 @@ function App() {
                 {phaseError && <span className="phase-error">{phaseError}</span>}
               </div> : <div className="property-row"><span>Type</span><code>{selectedNode.label ?? selectedNode.kind}</code></div>}
               <div className="property-row"><span>Connected edges</span><code>{graph.edges.filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id).length}</code></div>
+              {connectOptions.length > 0 && <div className="connect-editor">
+                <label htmlFor="connect-target">Connect to</label>
+                <select id="connect-target" value={connectTarget} onChange={(event) => setConnectTarget(event.target.value)}>
+                  <option value="">Choose a node…</option>
+                  {connectOptions.map((node) => <option key={node.id} value={node.id}>
+                    {node.kind.toUpperCase()} {node.kind === 'boundary' ? node.label : node.phase} · {node.id}
+                  </option>)}
+                </select>
+                <button type="button" disabled={!connectTarget} onClick={() => connectNodes(selectedNode.id, connectTarget)}>Connect</button>
+              </div>}
+              {selectedNode.custom && <button type="button" className="remove-node" onClick={() => removeAddedNode(selectedNode.id)}>Remove element</button>}
             </> : <p className="inspector-placeholder">Select a spider to inspect its phase, connections, and spatial position.</p>}
           </div>
                   </section>}
