@@ -38,7 +38,7 @@ const icons: Record<PictureElementId, ReactElement> = {
 const groups = [...new Set(pictureElements.map((element) => element.group))]
 
 export function SpiderPalette({ onAdd, onClear, addedCount }: SpiderPaletteProps) {
-  return <aside className="spider-palette" aria-label="Picturalism element palette">
+  return <aside className="spider-palette" data-tour="palette" aria-label="Picturalism element palette">
     <div className="spider-palette-heading"><span className="eyebrow">PICTURALISM</span><b>Diagram elements</b></div>
     {groups.map((group) => <section key={group} className="spider-palette-group" aria-label={group}>
       <h3>{group}</h3>
