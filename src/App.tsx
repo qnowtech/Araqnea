@@ -156,15 +156,8 @@ function App() {
                 ? <GateCircuitView circuit={result.circuit} onAdd={addGate} onRemove={removeGate} />
                 : <section className="mode-content active-spider-view">
                     <div className="view-title"><div><span className="eyebrow">MODE 03 · ZX GRAPH</span><h2>Spatial spider canvas</h2></div><span>Drag nodes · orbit · pan · zoom</span></div>
-                    <Spider3DCanvasView graph={graph} selectedId={selectedId} onSelect={setSelectedId} onMove={moveNode} />
-                  </section>}
-        </section>
-        <aside className="right-panel">
-          <div className="view-title"><div><span className="eyebrow">LIVE GRAPH</span><h2>3D spider inspector</h2></div><span className="live-dot">●</span></div>
-          <div className="preview-frame">
-            {result.circuit && <Spider3DCanvasView graph={graph} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setPhaseError('') }} onMove={moveNode} />}
-            <div className="preview-controls"><span>DRAG TO ORBIT</span><span>{graph.nodes.filter((node) => node.kind !== 'boundary').length} SPIDERS</span></div>
-          </div>
+                    <Spider3DCanvasView graph={graph} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setPhaseError('') }} onMove={moveNode} />
+                    <div className="graph-legend"><span><i className="z-dot" /> Z spider</span><span><i className="x-dot" /> X spider</span><span><i className="h-dot" /> Hadamard</span><span>{graph.nodes.filter((node) => node.kind !== 'boundary').length} SPIDERS · {graph.edges.length} CONNECTIONS</span></div>
           <div className="inspector">
             <div className="inspector-heading"><b>Selected node</b>{selectedNode && <span className={`node-tag ${selectedNode.kind}`}>{selectedNode.kind.toUpperCase()}</span>}</div>
             {selectedNode ? <>
@@ -177,10 +170,10 @@ function App() {
                 {phaseError && <span className="phase-error">{phaseError}</span>}
               </div> : <div className="property-row"><span>Type</span><code>{selectedNode.label ?? selectedNode.kind}</code></div>}
               <div className="property-row"><span>Connected edges</span><code>{graph.edges.filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id).length}</code></div>
-            </> : <p className="inspector-placeholder">Select a spider in either graph to inspect its phase and spatial position.</p>}
+            </> : <p className="inspector-placeholder">Select a spider to inspect its phase, connections, and spatial position.</p>}
           </div>
-          <div className="graph-legend"><span><i className="z-dot" /> Z spider</span><span><i className="x-dot" /> X spider</span><span><i className="h-dot" /> Hadamard</span></div>
-        </aside>
+                  </section>}
+        </section>
       </section>
       <section className="results">
         <div><span className="eyebrow">CIRCUIT OVERVIEW</span><h2>Quantum circuit</h2></div>
