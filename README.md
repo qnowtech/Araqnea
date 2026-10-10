@@ -5,6 +5,7 @@ Araqnea is a quantum workbench that translates OpenQASM 2.0 into synchronized ga
 ## Features
 
 - Three synchronized workbench modes: OpenQASM editor, gate circuit, and 3D ZX graph
+- Opens in the 3D spiders view by default, with a first-visit guided UI tour (restart anytime via **Tour** in the navbar) and an **About** panel
 - Live parsing with Bell, GHZ, and Hadamard test presets
 - Interactive 3D spiders with node selection, phase editing, drag-to-move, animated edges, orbit, pan, and zoom
 - Orthographic 2D and perspective 3D graph views with camera reset and zoom controls

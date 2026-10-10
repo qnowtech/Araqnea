@@ -493,6 +493,7 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onConn
     >
     <div
       ref={hostRef}
+      data-tour="canvas"
       className={`spider-3d-canvas ${dropActive ? 'drop-active' : ''}`}
       aria-label={`Interactive ${projection} ZX spider graph`}
     />
@@ -515,7 +516,7 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onConn
         ><span className="sr-only">{node.id}</span></button>
       })}
     </div>}
-    <div className="canvas-toolbar" aria-label="Graph canvas controls">
+    <div className="canvas-toolbar" data-tour="canvas-toolbar" aria-label="Graph canvas controls">
       <button type="button" aria-label="Connect nodes" aria-pressed={connecting} onClick={() => {
         const enabled = !connecting
         connectionRef.current.enabled = enabled

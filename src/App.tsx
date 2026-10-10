@@ -1,5 +1,7 @@
-import { useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { examples } from './data/examples'
+import { GuidedTour } from './components/GuidedTour'
+import { tourSteps } from './data/tourSteps'
 import { CodeView } from './components/views/CodeView'
 import { GateCircuitView } from './components/views/GateCircuitView'
 import { Spider3DCanvasView, type SpiderCanvasApi } from './components/views/Spider3DCanvasView'
@@ -22,15 +24,26 @@ const modeLabels: { id: WorkbenchMode; label: string; icon: string }[] = [
   { id: 'spiders', label: '3D spiders', icon: '◉' },
 ]
 
+const tourStorageKey = 'araqnea.tour.completed'
+const tourCompleted = () => {
+  try {
+    return window.localStorage.getItem(tourStorageKey) === 'true'
+  } catch {
+    return false
+  }
+}
+
 function App() {
   const [source, setSource] = useState<string>(examples['Bell state'])
-  const [mode, setMode] = useState<WorkbenchMode>('code')
+  const [mode, setMode] = useState<WorkbenchMode>('spiders')
   const [selectedId, setSelectedId] = useState<string>()
   const [phaseEdit, setPhaseEdit] = useState<{ nodeId?: string; value: string }>({ value: '' })
   const [phaseError, setPhaseError] = useState('')
   const [showExport, setShowExport] = useState(false)
   const [exportFormat, setExportFormat] = useState<ExportFormat>('qollab')
   const [copied, setCopied] = useState(false)
+  const [showAbout, setShowAbout] = useState(false)
+  const [showTour, setShowTour] = useState(() => !tourCompleted())
   const [positions, setPositions] = useState<Record<string, Vector3>>({})
   const [added, setAdded] = useState<ZXGraph3D>({ nodes: [], edges: [] })
   const addedCounter = useRef(0)
@@ -154,6 +167,21 @@ function App() {
   })[exportFormat]
   const exportName = ({ qollab: 'main.js', qasm: 'circuit.qasm', qiskit: 'circuit.py', zx: 'zx-graph.json' })[exportFormat]
 
+  const startTour = () => {
+    setShowExport(false)
+    setShowAbout(false)
+    setMode('spiders')
+    setShowTour(true)
+  }
+  const closeTour = useCallback(() => {
+    setShowTour(false)
+    try {
+      window.localStorage.setItem(tourStorageKey, 'true')
+    } catch {
+      // Storage may be unavailable (private mode); the tour will simply show again next visit.
+    }
+  }, [])
+
   const download = (name: string, text: string, type: string) => {
     const url = URL.createObjectURL(new Blob([text], { type }))
     const anchor = document.createElement('a')
@@ -183,9 +211,11 @@ function App() {
   return (
     <main className="app-shell">
       <header>
-        <a className="brand" href="/" aria-label="Araqnea home"><span className="brand-mark">⌬</span><span>Araqnea</span><small>QUANTUM WORKBENCH</small></a>
-        <nav>
+        <a className="brand" data-tour="brand" href="/" aria-label="Araqnea home"><span className="brand-mark">⌬</span><span>Araqnea</span><small>QUANTUM WORKBENCH</small></a>
+        <nav data-tour="navbar">
           <span className="header-status"><i /> LIVE SYNC</span>
+          <button type="button" onClick={startTour}>Tour <span aria-hidden="true">✦</span></button>
+          <button type="button" onClick={() => setShowAbout(true)}>About</button>
           <button type="button" onClick={() => setShowExport(true)}>Export <span aria-hidden="true">↗</span></button>
           <button className="run" type="button" onClick={() => setMode('gates')}>▶ Run circuit</button>
         </nav>
@@ -196,7 +226,7 @@ function App() {
             <div><span className="eyebrow">QUANTUM WORKSPACE</span><h1>Untitled circuit</h1></div>
             <span className={`status ${result.error ? 'error' : ''}`}>{result.error ?? '● Synced'}</span>
           </div>
-          <div className="mode-tabs" role="tablist" aria-label="Workbench mode">
+          <div className="mode-tabs" data-tour="mode-tabs" role="tablist" aria-label="Workbench mode">
             {modeLabels.map((item) => <button
               key={item.id}
               type="button"
@@ -218,8 +248,8 @@ function App() {
                       <SpiderPalette onAdd={(id) => addPictureElement(id)} onClear={() => { setAdded({ nodes: [], edges: [] }); if (selectedNode?.custom) setSelectedId(undefined) }} addedCount={addedElementCount} />
                       <Spider3DCanvasView graph={graph} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setPhaseError('') }} onMove={moveNode} onConnect={connectNodes} onDropElement={addPictureElement} apiRef={canvasApi} />
                     </div>
-                    <div className="graph-legend"><span><i className="z-dot" /> Z spider</span><span><i className="x-dot" /> X spider</span><span><i className="h-dot" /> Hadamard</span><span>{graph.nodes.filter((node) => node.kind !== 'boundary').length} SPIDERS · {graph.edges.length} CONNECTIONS</span></div>
-          <div className="inspector">
+                    <div className="graph-legend" data-tour="legend"><span><i className="z-dot" /> Z spider</span><span><i className="x-dot" /> X spider</span><span><i className="h-dot" /> Hadamard</span><span>{graph.nodes.filter((node) => node.kind !== 'boundary').length} SPIDERS · {graph.edges.length} CONNECTIONS</span></div>
+          <div className="inspector" data-tour="inspector">
             <div className="inspector-heading"><b>Selected node</b>{selectedNode && <span className={`node-tag ${selectedNode.kind}`}>{selectedNode.kind.toUpperCase()}</span>}</div>
             {selectedNode ? <>
               <div className="property-row"><span>Node ID</span><code>{selectedNode.id}</code></div>
@@ -243,7 +273,7 @@ function App() {
                   </section>}
         </section>
       </section>
-      <section className="results">
+      <section className="results" data-tour="overview">
         <div><span className="eyebrow">CIRCUIT OVERVIEW</span><h2>Quantum circuit</h2></div>
         <div className="result-stats">
           <span><b>{result.circuit?.qubits ?? 0}</b> QUBITS</span>
@@ -268,6 +298,21 @@ function App() {
           <div className="export-actions"><button className="copy" type="button" onClick={() => void copyExport()}>{copied ? 'Copied!' : 'Copy'}</button><button className="download" type="button" onClick={downloadExport}>Download {exportFormat === 'qollab' ? 'project files' : exportName}</button></div>
         </section>
       </div>}
+      {showAbout && <div className="modal-backdrop" role="presentation" onClick={() => setShowAbout(false)}>
+        <section className="modal about" role="dialog" aria-modal="true" aria-labelledby="about-title" onClick={(event) => event.stopPropagation()}>
+          <div className="modal-heading"><div><span className="eyebrow">ABOUT ARAQNEA</span><h2 id="about-title">A ZX-calculus quantum workbench</h2></div><button className="close" type="button" onClick={() => setShowAbout(false)} aria-label="Close about">×</button></div>
+          <p>Araqnea lets you design quantum circuits three ways — OpenQASM 2.0 code, a gate circuit editor, and an interactive 3D ZX-calculus spider canvas — all kept in live sync.</p>
+          <ul>
+            <li><b>Code</b> — write or load OpenQASM 2.0 presets with instant parsing.</li>
+            <li><b>Circuit gates</b> — add and remove gates on qubit wires.</li>
+            <li><b>3D spiders</b> — explore the ZX graph spatially, drag picturalism elements in, connect nodes, and edit phases.</li>
+            <li><b>Export</b> — Qollab browser project, OpenQASM, Qiskit Python, or 3D ZX JSON.</li>
+          </ul>
+          <p className="about-meta">Built by Qnow Technologies · Released under the MIT License.</p>
+          <div className="export-actions"><button type="button" onClick={startTour}>Take the guided tour</button><button className="copy" type="button" onClick={() => setShowAbout(false)}>Close</button></div>
+        </section>
+      </div>}
+      {showTour && <GuidedTour steps={tourSteps} onClose={closeTour} />}
     </main>
   )
 }

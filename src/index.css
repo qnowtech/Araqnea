@@ -158,3 +158,23 @@ footer { padding: 15px 4vw; color: #67778d; font-size: 10px; display: flex; just
   .code-editor { height: 375px; }.code-toolbar select { min-width: 175px; }
   .view-title > span { font-size: 8px; }
 }
+.modal.about p { color: #b4c2d3; font-size: 12px; line-height: 1.7; margin: 0 0 12px; }
+.modal.about ul { margin: 0 0 14px; padding-left: 18px; color: #a3b2c4; font-size: 11px; line-height: 1.8; }
+.modal.about li b { color: #e3ebf4; }
+.modal.about .about-meta { color: #728197; font-size: 10px; }
+.tour-layer { position: fixed; z-index: 10; inset: 0; }
+.tour-blocker { position: absolute; inset: 0; }
+.tour-dim { position: absolute; inset: 0; background: #02050acc; pointer-events: none; }
+.tour-spotlight { position: fixed; border: 2px solid #65e8ce; border-radius: 10px; box-shadow: 0 0 0 9999px #02050acc, 0 0 24px #35cdaa88; pointer-events: none; transition: top .25s ease, left .25s ease, width .25s ease, height .25s ease; }
+.tour-card { position: fixed; padding: 18px; border: 1px solid #354866; border-radius: 12px; background: #101928; box-shadow: 0 20px 60px #000; outline: none; }
+.tour-card h2 { margin-bottom: 8px; }
+.tour-card p { margin: 0 0 14px; color: #b4c2d3; font-size: 12px; line-height: 1.65; }
+.tour-progress { display: flex; gap: 5px; margin-bottom: 14px; }
+.tour-progress i { width: 6px; height: 6px; border-radius: 50%; background: #2c3a50; }
+.tour-progress i.active { width: 18px; border-radius: 3px; background: #65e8ce; }
+.tour-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tour-actions span { display: flex; gap: 6px; }
+.tour-actions button { padding: 8px 12px; border: 1px solid #3c4c64; border-radius: 6px; color: #dce5f1; background: transparent; font-size: 11px; }
+.tour-actions .tour-skip { border-color: transparent; color: #8797aa; padding-left: 0; }
+.tour-actions .tour-next { border-color: #35cdaa; color: #061711; background: #35cdaa; font-weight: 800; }
+@media (prefers-reduced-motion: reduce) { .tour-spotlight { transition: none; } }
