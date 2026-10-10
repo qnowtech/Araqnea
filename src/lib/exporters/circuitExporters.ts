@@ -1,4 +1,4 @@
-import type { QuantumCircuit } from '../../types/circuit'
+import type { GateName, QuantumCircuit } from '../../types/circuit'
 import type { ZXGraph3D } from '../../types/zx'
 
 const formatGate = (name: string, qubits: number[], parameter?: string, separator = ',') =>
@@ -68,7 +68,7 @@ export function toQiskitPython(circuit: QuantumCircuit): string {
   return lines.join('\n')
 }
 
-const pennyLaneOps: Partial<Record<QuantumCircuit['gates'][number]['name'], string>> = {
+const pennyLaneOps: Record<Exclude<GateName, 'measure'>, string> = {
   h: 'Hadamard', x: 'PauliX', y: 'PauliY', z: 'PauliZ', s: 'S', t: 'T', rx: 'RX', rz: 'RZ', cx: 'CNOT', cz: 'CZ', swap: 'SWAP',
 }
 
@@ -84,7 +84,7 @@ export function toPennyLane(circuit: QuantumCircuit): string {
       else if (!finalMeasured.includes(wire)) finalMeasured.push(wire)
       return
     }
-    const op = pennyLaneOps[gate.name]!
+    const op = pennyLaneOps[gate.name]
     const wires = gate.qubits.length > 1 ? `[${gate.qubits.join(', ')}]` : `${gate.qubits[0]}`
     body.push(`    qml.${op}(${gate.parameter ? `${pyAngle(gate.parameter)}, ` : ''}wires=${wires})`)
   })

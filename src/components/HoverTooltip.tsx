@@ -77,6 +77,6 @@ export function HoverTooltip() {
   const left = Math.min(Math.max(tip.x, 150), window.innerWidth - 150)
   return <div className={`hover-tip ${tip.placement}`} role="tooltip" style={{ left, top: tip.y }}>
     <b>{title}</b>
-    {body.map((line) => <span key={line}>{line}</span>)}
+    {body.map((line, index) => <span key={index}>{line}</span>)}
   </div>
 }

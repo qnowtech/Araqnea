@@ -320,7 +320,8 @@ function App() {
   }
   const duplicateCircuit = () => {
     setLibrary((current) => {
-      const copy = { ...createCircuit(uniqueTitle(current, `${active.title} copy`), active.source), added: active.added, positions: active.positions }
+      const original = current.circuits.find((circuit) => circuit.id === current.activeId) ?? current.circuits[0]
+      const copy = { ...createCircuit(uniqueTitle(current, `${original.title} copy`), original.source), added: original.added, positions: original.positions }
       return { activeId: copy.id, circuits: [...current.circuits, copy] }
     })
     setSelectedIds([])

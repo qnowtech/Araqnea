@@ -140,6 +140,8 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       if (isEditable(event.target) || document.querySelector('[role="dialog"]')) return
+      const wrap = hostRef.current?.parentElement
+      if (event.target !== document.body && !(event.target instanceof Node && wrap?.contains(event.target))) return
       if (event.key === 'Escape') {
         if (connectionRef.current.source) { event.preventDefault(); cancelConnection('Connection cancelled.') }
         else if (selectedRef.current.size) { event.preventDefault(); onSelectionChange([]) }
@@ -681,7 +683,7 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
     {connectionSource && <div className="canvas-node-actions" ref={actionMenu} role="toolbar" aria-label={`Actions for ${connectionSource}`}>
       {sourceDeletable && <button type="button" className="node-delete" aria-label={`Delete ${connectionSource}`} data-tip={'Delete node\nRemoves this node. Circuit spiders remove their gate from the code and gate view.'} onClick={() => deleteNodes([connectionSource])}>×</button>}
     </div>}
-    {hoverNode && <div className="canvas-hover-tip" ref={hoverTip} role="tooltip"><b>{hoverTitle}</b>{hoverBody.map((line) => <span key={line}>{line}</span>)}</div>}
+    {hoverNode && <div className="canvas-hover-tip" ref={hoverTip} role="tooltip"><b>{hoverTitle}</b>{hoverBody.map((line, index) => <span key={index}>{line}</span>)}</div>}
     {marquee && <div className="canvas-marquee" style={{ left: Math.min(marquee.x0, marquee.x1), top: Math.min(marquee.y0, marquee.y1), width: Math.abs(marquee.x1 - marquee.x0), height: Math.abs(marquee.y1 - marquee.y0) }} />}
     <div className="canvas-toolbar" data-tour="canvas-toolbar" aria-label="Graph canvas controls">
       <button type="button" aria-label="Select all nodes" data-tip={'Select all\nSelects every node so you can move or delete them together. Shortcut: Ctrl/⌘ + A.'} onClick={() => onSelectionChange(graph.nodes.map((node) => node.id))}>All</button>
