@@ -47,7 +47,7 @@ export function SpiderPalette({ onAdd, onClear, addedCount }: SpiderPaletteProps
           key={element.id}
           type="button"
           draggable
-          title={`${element.description} — drag onto the canvas or click to add`}
+          data-tip={`${element.label}\n${element.description}\nDrag onto the canvas, or click to add at the view centre.`}
           aria-label={`Add ${element.label}`}
           data-element={element.id}
           onDragStart={(event) => {
@@ -62,7 +62,7 @@ export function SpiderPalette({ onAdd, onClear, addedCount }: SpiderPaletteProps
         </button>)}
       </div>
     </section>)}
-    <p className="spider-palette-hint">Drag a symbol onto the canvas, or click to place it at the view centre.</p>
+    <p className="spider-palette-hint">Drag a symbol onto the canvas, or click to place it at the view centre. Drop a spider or Hadamard on a qubit wire to add it to the circuit.</p>
     {addedCount > 0 && <button type="button" className="spider-palette-clear" onClick={onClear}>Clear {addedCount} added element{addedCount === 1 ? '' : 's'}</button>}
   </aside>
 }
