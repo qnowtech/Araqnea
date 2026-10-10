@@ -14,6 +14,8 @@ export interface ZXNode {
   label?: string
   gateId?: string
   position: Vector3
+  custom?: boolean
+  symbol?: string
 }
 
 export interface ZXEdge {
@@ -21,6 +23,7 @@ export interface ZXEdge {
   source: string
   target: string
   hadamard?: boolean
+  custom?: boolean
 }
 
 export interface ZXGraph3D {

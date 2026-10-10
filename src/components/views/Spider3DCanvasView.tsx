@@ -1,13 +1,20 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { isPictureElementId, pictureElementMime, type PictureElementId } from '../../lib/zx-core/pictureElements'
 import type { ZXGraph3D, ZXNode, Vector3 } from '../../types/zx'
+
+export interface SpiderCanvasApi {
+  centerPoint: () => Vector3
+}
 
 interface Spider3DCanvasViewProps {
   graph: ZXGraph3D
   selectedId?: string
   onSelect: (id: string) => void
   onMove: (id: string, position: Vector3) => void
+  onDropElement?: (elementId: PictureElementId, position: Vector3) => void
+  apiRef?: RefObject<SpiderCanvasApi | null>
   className?: string
 }
 
@@ -33,13 +40,14 @@ function labelSprite(node: ZXNode) {
   return sprite
 }
 
-export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, className = '' }: Spider3DCanvasViewProps) {
+export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, onDropElement, apiRef, className = '' }: Spider3DCanvasViewProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const callbacks = useRef({ onSelect, onMove })
-  const controls = useRef<{ zoom: (factor: number) => void; reset: () => void } | null>(null)
+  const controls = useRef<{ zoom: (factor: number) => void; reset: () => void; pointAt: (clientX: number, clientY: number) => Vector3; center: () => Vector3 } | null>(null)
   const selectedRef = useRef(selectedId)
   const savedView = useRef<{ projection: string; position: THREE.Vector3; target: THREE.Vector3; zoom: number } | null>(null)
   const [projection, setProjection] = useState<'3d' | '2d'>('3d')
+  const [dropActive, setDropActive] = useState(false)
   useEffect(() => {
     callbacks.current = { onSelect, onMove }
   }, [onSelect, onMove])
@@ -114,6 +122,8 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, classN
         }
         navigation.update()
       },
+      pointAt: () => ({ x: 0, y: 0, z: 0 }),
+      center: () => ({ x: 0, y: 0, z: 0 }),
     }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     renderer.outputColorSpace = THREE.SRGBColorSpace
@@ -237,6 +247,16 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, classN
       pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1)
       raycaster.setFromCamera(pointer, camera)
     }
+    const toGraph = (point: THREE.Vector3): Vector3 => ({ x: point.x * sceneScale, y: point.y * sceneScale, z: is2D ? 0 : point.z * sceneScale })
+    controls.current!.center = () => toGraph(navigation.target)
+    controls.current!.pointAt = (clientX, clientY) => {
+      const rect = renderer.domElement.getBoundingClientRect()
+      pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1)
+      raycaster.setFromCamera(pointer, camera)
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), navigation.target)
+      const point = new THREE.Vector3()
+      return toGraph(raycaster.ray.intersectPlane(plane, point) ? point : navigation.target)
+    }
     const down = (event: PointerEvent) => {
       if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey) return
       updatePointer(event)
@@ -245,7 +265,8 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, classN
         navigation.enabled = false
         const id = hit.userData.nodeId as string
         callbacks.current.onSelect(id)
-        if (nodeMap.get(id)?.kind !== 'boundary') {
+        const node = nodeMap.get(id)
+        if (node && (node.kind !== 'boundary' || node.custom)) {
           dragging = hit
           dragPlane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), hit.position)
           raycaster.ray.intersectPlane(dragPlane, dragPoint)
@@ -340,8 +361,32 @@ export function Spider3DCanvasView({ graph, selectedId, onSelect, onMove, classN
     }
   }, [graph, projection])
 
+  useEffect(() => {
+    if (!apiRef) return
+    apiRef.current = { centerPoint: () => controls.current?.center() ?? { x: 0, y: 0, z: 0 } }
+    return () => { apiRef.current = null }
+  }, [apiRef])
+
   return <div className={`spider-canvas-wrap ${className}`}>
-    <div ref={hostRef} className="spider-3d-canvas" aria-label={`Interactive ${projection} ZX spider graph`} />
+    <div
+      ref={hostRef}
+      className={`spider-3d-canvas ${dropActive ? 'drop-active' : ''}`}
+      aria-label={`Interactive ${projection} ZX spider graph`}
+      onDragOver={(event) => {
+        if (!onDropElement || !event.dataTransfer.types.includes(pictureElementMime)) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'copy'
+        setDropActive(true)
+      }}
+      onDragLeave={() => setDropActive(false)}
+      onDrop={(event) => {
+        setDropActive(false)
+        const elementId = event.dataTransfer.getData(pictureElementMime)
+        if (!onDropElement || !controls.current || !isPictureElementId(elementId)) return
+        event.preventDefault()
+        onDropElement(elementId, controls.current.pointAt(event.clientX, event.clientY))
+      }}
+    />
     <div className="canvas-toolbar" aria-label="Graph canvas controls">
       <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => controls.current?.zoom(1.2)}>+</button>
       <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => controls.current?.zoom(1 / 1.2)}>−</button>
