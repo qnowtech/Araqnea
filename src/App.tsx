@@ -12,7 +12,7 @@ const palette: { name: GateName; label: string }[] = [
 ]
 
 function App() {
-  const [source, setSource] = useState(examples['Bell state'])
+  const [source, setSource] = useState<string>(examples['Bell state'])
   const [selected, setSelected] = useState<string>()
   const [showExport, setShowExport] = useState(false)
   const result = useMemo(() => parseQasm(source), [source])
@@ -69,7 +69,7 @@ function App() {
       </section>
       <section className="results"><div><span className="eyebrow">BUILT-IN LOCAL SIMULATOR</span><h2>Measurement probabilities</h2></div><div className="bars"><span><i style={{ height: '50%' }} />00 <b>50%</b></span><span><i style={{ height: '0%' }} />01 <b>0%</b></span><span><i style={{ height: '0%' }} />10 <b>0%</b></span><span><i style={{ height: '50%' }} />11 <b>50%</b></span></div></section>
       <footer>This effort is supported by <strong>Qollab &amp; IonQ</strong><span>•</span> Built for Quantum Unlocked</footer>
-      {showExport && result.circuit && <div className="modal-backdrop" role="presentation" onClick={() => setShowExport(false)}><section className="modal" role="dialog" aria-modal="true" aria-label="Export Qollab project" onClick={(event) => event.stopPropagation()}><div><span className="eyebrow">QOLLAB EXPORT</span><h2>Ready to run in the browser</h2></div><pre>{toQollabJs(result.circuit)}</pre><button className="copy" type="button" onClick={() => navigator.clipboard.writeText(toQollabJs(result.circuit))}>Copy main.js</button><button className="close" type="button" onClick={() => setShowExport(false)}>Close</button></section></div>}
+      {showExport && result.circuit && <div className="modal-backdrop" role="presentation" onClick={() => setShowExport(false)}><section className="modal" role="dialog" aria-modal="true" aria-label="Export Qollab project" onClick={(event) => event.stopPropagation()}><div><span className="eyebrow">QOLLAB EXPORT</span><h2>Ready to run in the browser</h2></div><pre>{toQollabJs(result.circuit)}</pre><button className="copy" type="button" onClick={() => navigator.clipboard.writeText(toQollabJs(result.circuit!))}>Copy main.js</button><button className="close" type="button" onClick={() => setShowExport(false)}>Close</button></section></div>}
     </main>
   )
 }
