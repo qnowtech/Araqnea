@@ -1,5 +1,43 @@
 import type { QuantumCircuit } from '../../types/circuit'
 import type { ZXGraph3D } from '../../types/zx'
+import { parsePhase } from '../zx-core/semantics'
+
+// The documented JS/Qiskit wrapper (https://qollab.xyz/learn/docs/js-qiskit-projects).
+// Qollab resolves `import { QuantumCircuit } from 'qiskit'` by rewriting it to
+// `await require("qiskit")` before wrapping main.js in its AsyncFunction, then
+// resolves that bare specifier through its fallback (Python `import qiskit as m`).
+// A dynamic `import('qiskit')` is NOT rewritten — it hits the native browser
+// loader, which fails with "Failed to resolve module specifier 'qiskit'". So we
+// emit the `await require("qiskit")` form directly: it is exactly what Qollab's
+// scanner (`lt`) and resolver expect, and it is legal inside the function body.
+// Off Qollab there is no such `require`, so this only runs behind getQollabBackend().
+// Qollab injects `require` as the 4th parameter of the AsyncFunction that wraps
+// main.js (exactly like `backend`). We must call it as `require("qiskit")`, but a
+// literal `require` identifier makes Rolldown treat the bundle as CJS and rewrite the
+// call into an interop shim that throws off-Qollab. A DIRECT eval keeps the local
+// scope chain, so it reads the injected `require` parameter at run time, while the
+// identifier never appears as a static `require(...)` call for Rolldown to rewrite.
+type QiskitWrapperConstructor = (...args: number[]) => QiskitWrapperCircuit
+
+type QollabRequire = (name: string) => Promise<{ QuantumCircuit: QiskitWrapperConstructor }>
+
+const readQollabRequire = (): QollabRequire | undefined => {
+  try {
+    // Direct eval: sees the AsyncFunction `require` parameter inside Qollab.
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const read = eval('typeof require !== "undefined" ? require : undefined') as QollabRequire | undefined
+    return typeof read === 'function' ? read : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function loadQollabQuantumCircuit(): Promise<QiskitWrapperConstructor> {
+  const qollabRequire = readQollabRequire()
+  if (!qollabRequire) throw new Error('The qiskit wrapper is only available when running on qollab.xyz.')
+  const module = await qollabRequire('qiskit')
+  return module.QuantumCircuit
+}
 
 const jsAngle = (parameter: string) => parameter.replace(/\btau\b/gi, '(2 * Math.PI)').replace(/\bpi\b/gi, 'Math.PI')
 
@@ -162,14 +200,139 @@ ${operations}
 
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!)
 
-// Builds a single self-contained index.html for Qollab: CSS is inlined in a
-// <style> tag and the JS in an inline <script type="module">. Qollab serves the
-// page from its own origin root, so relative refs like ./style.css or ./main.js
-// would resolve to Qollab's own files and never load — everything must inline.
+// ---- Running on Qollab's own runtime ---------------------------------------
+//
+// When Araqnea itself runs as a Qollab JS project, the Qollab runtime injects
+// a pre-created `backend` global (the device picked in the Select QPU dialog)
+// and resolves `import ... from 'qiskit'` to its JS wrapper of the Python
+// Qiskit API — see https://qollab.xyz/learn/docs/js-qiskit-projects and
+// https://qollab.xyz/learn/docs/compute-backends. runWithQollabBackend uses
+// the wrapper conventions exactly: constructors without `new`, the Python
+// method names, `await backend.run(circuit, { shots })`, and `.toJs()` to
+// unpack the counts. Outside Qollab there is no `backend` global, so
+// getQollabBackend returns undefined and the app falls back to exporting a
+// runnable project zip instead.
+
+export interface QollabJob {
+  result: () => Promise<{ get_counts: () => { toJs: () => unknown } }>
+}
+
+export interface QollabBackend {
+  run: (circuit: unknown, options: { shots: number }) => Promise<QollabJob>
+  // Qiskit Backend objects expose a `name`; it may be a plain string or a proxy.
+  name?: unknown
+}
+
+// The device picked in Qollab's Select QPU dialog, as a display name. Reads the
+// backend's `name`, unwrapping proxy values via .toJs()/.toString(). Falls back to
+// undefined when no backend is injected or no name is available.
+export function qollabBackendName(backend: QollabBackend | undefined): string | undefined {
+  if (!backend) return undefined
+  const raw = (backend as { name?: unknown }).name
+  if (raw == null) return undefined
+  if (typeof raw === 'string') return raw
+  const proxy = raw as { toJs?: () => unknown; toString?: () => string }
+  try {
+    const value = typeof proxy.toJs === 'function' ? proxy.toJs() : proxy.toString?.()
+    return typeof value === 'string' && value ? value : String(value ?? '') || undefined
+  } catch {
+    return undefined
+  }
+}
+
+// Qollab injects `backend` as a parameter of the AsyncFunction that wraps
+// main.js. Declare it so TypeScript accepts the bare reference; at run time the
+// typeof guard below keeps it safe where Qollab has not injected one.
+declare const backend: QollabBackend | undefined
+
+// Qiskit circuit objects from the wrapper are proxies whose methods take the
+// same arguments as Python Qiskit: rx(theta, qubit), measure(qubit, cbit), …
+type QiskitWrapperCircuit = Record<string, (...args: unknown[]) => unknown>
+
+// Qollab injects `backend` as a parameter of the AsyncFunction that wraps
+// main.js, NOT as a property of globalThis. The built bundle is flattened into
+// that function body, so a bare `typeof backend` in module scope sees the
+// injected parameter (a `new Function` would NOT — it only sees globals). The
+// typeof guard keeps the reference safe off Qollab, where no `backend` exists.
+export function getQollabBackend(): QollabBackend | undefined {
+  if (typeof backend !== 'undefined') return backend
+  return (globalThis as { backend?: QollabBackend }).backend
+}
+
+const asCounts = (value: unknown): Record<string, number> => {
+  if (value instanceof Map) return Object.fromEntries(value) as Record<string, number>
+  return (value ?? {}) as Record<string, number>
+}
+
+export interface QollabRunOutcome {
+  counts: Record<string, number>
+  backendName?: string
+}
+
+export async function runWithQollabBackend(circuit: QuantumCircuit, backend: QollabBackend, shots = 1000): Promise<QollabRunOutcome> {
+  // Load the wrapper lazily (see loadQollabQuantumCircuit) and build the
+  // circuit: no `new`, call the constructor like the Python API.
+  const QollabQuantumCircuit = await loadQollabQuantumCircuit()
+  const wrapper = QollabQuantumCircuit(circuit.qubits, circuit.classicalBits || circuit.qubits)
+  for (const gate of circuit.gates) {
+    if (gate.name === 'measure') {
+      wrapper.measure(gate.qubits[0], gate.classicalBit ?? gate.qubits[0])
+      continue
+    }
+    const args = [...gate.qubits]
+    if (gate.parameter != null) {
+      const angle = parsePhase(gate.parameter)?.radians
+      if (angle == null) throw new Error(`Cannot parse the angle “${gate.parameter}” of ${gate.name}.`)
+      args.unshift(angle)
+    }
+    wrapper[gate.name](...args)
+  }
+  const job = await backend.run(wrapper, { shots })
+  const counts = asCounts((await job.result()).get_counts().toJs())
+  return { counts, backendName: qollabBackendName(backend) }
+}
+
+// The page markup shared by the standalone bundle and the runnable Qollab
+// project. Per https://qollab.xyz/learn/docs/runtime-environment, Qollab
+// injects index.html into the page BODY: it drops <html>/<head>/<body> and
+// never runs <script> tags, so a runnable Qollab project ships this markup
+// alone as index.html, with the code in main.js and the styles in main.css
+// (the runtime loads both by name, at the top level).
+export function toQollabBody(title = 'Araqnea circuit'): string {
+  const safe = escapeHtml(title)
+  return [
+    '<main>',
+    '  <header>',
+    `    <h1>${safe}</h1>`,
+    '    <p class="subtitle">Exported from Araqnea</p>',
+    '  </header>',
+    '  <section aria-label="Gate circuit">',
+    '    <h2>Gate circuit</h2>',
+    '    <div id="circuit" class="canvas"></div>',
+    '  </section>',
+    '  <section aria-label="ZX spider diagram">',
+    '    <h2>ZX spiders</h2>',
+    '    <p class="legend"><span><span class="dot z"></span>Z spider</span><span><span class="dot x"></span>X spider</span><span><span class="dot h"></span>Hadamard</span><span><span class="dot b"></span>Boundary</span></p>',
+    '    <div id="zx" class="canvas"></div>',
+    '  </section>',
+    '  <section aria-label="Measurement results">',
+    '    <h2>Measurement counts <span class="muted">(1000 shots)</span></h2>',
+    '    <pre id="results">Preparing…</pre>',
+    '  </section>',
+    '</main>',
+  ].join('\n')
+}
+
+// Builds a single self-contained index.html: CSS is inlined in a <style> tag
+// and the JS in an inline <script type="module">. This is the format to
+// download and open anywhere; for uploading to Qollab use the separate
+// index.html (toQollabBody), main.js (toQollabJs) and main.css (toQollabCss),
+// because the Qollab runtime ignores scripts inside index.html.
 export function toQollabHtml(title = 'Araqnea circuit', css?: string, js?: string): string {
   const safe = escapeHtml(title)
   const styleBlock = css == null ? '    <link rel="stylesheet" href="./style.css" />' : `    <style>\n${css}\n    </style>`
   const scriptBlock = js == null ? '    <script type="module" src="./main.js"></script>' : `    <script type="module">\n${js}\n    </script>`
+  const body = toQollabBody(title).split('\n').map((line) => `    ${line}`).join('\n')
   return [
     '<!doctype html>',
     '<html lang="en">',
@@ -180,25 +343,7 @@ export function toQollabHtml(title = 'Araqnea circuit', css?: string, js?: strin
     styleBlock,
     '  </head>',
     '  <body>',
-    '    <main>',
-    '      <header>',
-    `        <h1>${safe}</h1>`,
-    '        <p class="subtitle">Exported from Araqnea</p>',
-    '      </header>',
-    '      <section aria-label="Gate circuit">',
-    '        <h2>Gate circuit</h2>',
-    '        <div id="circuit" class="canvas"></div>',
-    '      </section>',
-    '      <section aria-label="ZX spider diagram">',
-    '        <h2>ZX spiders</h2>',
-    '        <p class="legend"><span><span class="dot z"></span>Z spider</span><span><span class="dot x"></span>X spider</span><span><span class="dot h"></span>Hadamard</span><span><span class="dot b"></span>Boundary</span></p>',
-    '        <div id="zx" class="canvas"></div>',
-    '      </section>',
-    '      <section aria-label="Measurement results">',
-    '        <h2>Measurement counts <span class="muted">(1000 shots)</span></h2>',
-    '        <pre id="results">Preparing…</pre>',
-    '      </section>',
-    '    </main>',
+    body,
     scriptBlock,
     '  </body>',
     '</html>',

@@ -2,7 +2,7 @@
 
 ![Araqnea](src/assets/araqnea.png)
 
-Araqnea is a quantum workbench that translates OpenQASM 2.0 into synchronized gate circuits and interactive 3D ZX-calculus diagrams.
+Araqnea is a quantum workbench that translates OpenQASM 2.0/3.0 into synchronized gate circuits and interactive 3D ZX-calculus diagrams.
 
 ## Features
 

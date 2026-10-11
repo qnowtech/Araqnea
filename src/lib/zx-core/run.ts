@@ -66,6 +66,8 @@ export interface HardwareRun {
   mode: 'hardware'
   counts: Record<string, number>
   qasm: string
+  /** Name of the backend that produced the counts (e.g. the Qollab device). */
+  backendName?: string
 }
 
 export type RunResult =

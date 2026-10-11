@@ -27,6 +27,22 @@ export default defineConfig({
         return `${mount}\n`
       },
     },
+    {
+      // Qollab's runtime evaluates main.js as the body of `new AsyncFunction(...)`,
+      // so `import.meta` anywhere in the bundle is a SyntaxError. The qiskit load is
+      // a `require("qiskit")` call (see qollabExporter.ts), so there is no dynamic
+      // import to unwrap; this plugin just guards that no stray import.meta slips in.
+      name: 'qollab-no-import-meta',
+      enforce: 'post',
+      generateBundle(_options, bundle) {
+        for (const file of Object.values(bundle)) {
+          if (file.type !== 'chunk') continue
+          if (file.code.includes('import.meta')) {
+            this.warn('dist-qollab bundle contains import.meta — Qollab will reject it')
+          }
+        }
+      },
+    },
   ],
   base: './',
   publicDir: false,
@@ -37,6 +53,9 @@ export default defineConfig({
     modulePreload: false,
     assetsInlineLimit: 100 * 1024 * 1024, // inline every asset as base64
     rollupOptions: {
+      // 'qiskit' is provided by the Qollab runtime and must stay a bare import
+      // in main.js for Qollab to resolve; it is never bundled.
+      external: ['qiskit'],
       output: {
         codeSplitting: false,
         entryFileNames: 'main.js',
