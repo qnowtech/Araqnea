@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
@@ -16,6 +16,10 @@ const program = ts.createProgram([
   'src/lib/exporters/qollabExporter.ts',
 ], {
   target: ts.ScriptTarget.ES2022,
+  // CJS so the extensionless relative requires resolve in Node. The
+  // `import { QuantumCircuit } from 'qiskit'` becomes require('qiskit'), which
+  // resolves against the stub package written into the output below; the
+  // wrapper only executes when runWithQollabBackend actually runs on Qollab.
   module: ts.ModuleKind.CommonJS,
   moduleResolution: ts.ModuleResolutionKind.Node10,
   ignoreDeprecations: '6.0',
@@ -32,6 +36,12 @@ assert.equal(diagnostics.length, 0, ts.formatDiagnosticsWithColorAndContext(diag
   getNewLine: () => '\n',
 }))
 assert.equal(program.emit().emitSkipped, false)
+// Stub the 'qiskit' package the Qollab runtime provides, so the emitted
+// require('qiskit') resolves when the module is loaded. It is never called:
+// the tests only exercise the pure exporters, not runWithQollabBackend.
+mkdirSync(join(output, 'node_modules/qiskit'), { recursive: true })
+writeFileSync(join(output, 'node_modules/qiskit/package.json'), JSON.stringify({ name: 'qiskit', main: 'index.js' }))
+writeFileSync(join(output, 'node_modules/qiskit/index.js'), 'module.exports = { QuantumCircuit: class {} };\n')
 const require = createRequire(import.meta.url)
 const { evaluateAngle, angleParameter, displayAngle, editableGateAngle } = require(join(output, 'lib/angles.js'))
 const { parseQasm } = require(join(output, 'lib/parsers/qasm2Parser.js'))
