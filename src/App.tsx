@@ -497,6 +497,38 @@ function App() {
                     <div className="spider-stage">
                       <SpiderPalette onAdd={(id) => addPictureElement(id)} onJoin={(id) => setJoinElement((current) => current === id ? null : id)} joinId={joinElement} onCancelJoin={() => setJoinElement(null)} onClear={() => { setJoinElement(null); updateActive(() => ({ added: { nodes: [], edges: [] } })); setSelectedIds((ids) => ids.filter((id) => !added.nodes.some((node) => node.id === id))) }} addedCount={addedElementCount} />
                       <Spider3DCanvasView cameraKey={`${active.id}-${presetRevision}`} graph={graph} selectedIds={selectedIds} onSelectionChange={setSelectedIds} onMove={moveNodes} onConnect={connectNodes} onDelete={deleteNodes} canDelete={canDelete} describeNode={describeNode} onDropElement={addPictureElement} joinGuide={joinPlan?.text} joinNodeIds={joinPlan?.sites.map((site) => site.nodeId)} onJoinNode={joinPictureElement} onCancelJoin={() => setJoinElement(null)} apiRef={canvasApi} />
+                      <aside className="inspector" data-tour="inspector" aria-label="Selected node">
+                        <div className="inspector-heading"><b>{selectedIds.length > 1 ? `${selectedIds.length} nodes selected` : 'Selected node'}</b>{selectedNode && <span className={`node-tag ${selectedNode.kind}`}>{selectedNode.kind.toUpperCase()}</span>}</div>
+                        {selectedIds.length > 1 ? <>
+                          <p className="inspector-placeholder">Drag any selected node on the canvas to move the whole group. Press Delete to remove the deletable nodes.</p>
+                          <div className="inspector-actions">
+                            <button type="button" className="remove-node" onClick={() => deleteNodes(selectedIds.filter(canDelete))} disabled={!selectedIds.some(canDelete)}>Delete {selectedIds.filter(canDelete).length} deletable</button>
+                            <button type="button" onClick={() => setSelectedIds([])}>Clear selection</button>
+                          </div>
+                        </> : selectedNode ? <>
+                          {nodeFormula && <div className="property-row formula-row"><span>Formula</span><code>{nodeFormula.latex}</code></div>}
+                          <div className="property-row"><span>Node ID</span><code>{selectedNode.id}</code></div>
+                          {selectedNode.custom
+                            ? <div className="property-row"><span>Picturalism symbol</span><code>{pictureElements.find((element) => element.id === selectedNode.symbol)?.label ?? selectedNode.symbol}</code></div>
+                            : <div className="property-row"><span>Qubit wire</span><code>q[{selectedNode.wire}]</code></div>}
+                          <div className="property-row"><span>3D position</span><code>{selectedNode.position.x.toFixed(1)}, {selectedNode.position.y.toFixed(1)}, {selectedNode.position.z.toFixed(1)}</code></div>
+                          {canEditPhase ? <PhaseEditor key={selectedNode.id} diagramOnly={Boolean(selectedNode.custom)} parameter={selectedNode.custom ? selectedNode.phase || '0' : selectedAngle!.parameter} target={selectedNode.custom
+                            ? `${selectedNode.kind.toUpperCase()} palette spider only; Add to circuit applies it as a gate`
+                            : `Applies to ${selectedAngle!.name === 'p' ? 'Ph' : selectedAngle!.name.toUpperCase()} on q[${selectedNode.wire}]${selectedGate!.name !== selectedAngle!.name ? ` (replaces fixed ${selectedGate!.name.toUpperCase()})` : ''}`} onApply={updatePhase} />
+                            : <div className="property-row"><span>{selectedNode.kind === 'x' || selectedNode.kind === 'z' ? 'Fixed phase' : 'Type'}</span><code>{selectedNode.phase || selectedNode.label || selectedNode.kind}</code></div>}
+                          {!canEditPhase && selectedGate && (selectedNode.kind === 'x' || selectedNode.kind === 'z') && <p className="editor-hint">{selectedGate.name === 'ry' ? 'Ry basis-change phases are fixed. Select the central X spider to edit the Ry angle.' : `This phase belongs to the ${selectedGate.name.toUpperCase()} decomposition and is not independently editable.`}</p>}
+                          <div className="property-row"><span>Connected edges</span><code>{graph.edges.filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id).length}</code></div>
+                          {added.edges.filter((edge) => edge.id.startsWith('pic-edge-') && (edge.source === selectedNode.id || edge.target === selectedNode.id)).map((edge) => <div className="property-row" key={edge.id}>
+                            <code>{edge.source === selectedNode.id ? edge.target : edge.source}</code>
+                            <button type="button" aria-label={`Disconnect ${edge.source} from ${edge.target}`} onClick={() => updateActive((circuit) => ({ added: { ...circuit.added, edges: circuit.added.edges.filter((item) => item.id !== edge.id) } }))}>Disconnect</button>
+                          </div>)}
+                          <div className="inspector-actions">
+                            <button type="button" onClick={() => canvasApi.current?.startConnection(selectedNode.id)} data-tip={'Connect\nStart a wire from this node, then click a target node.'}>Connect from here</button>
+                            {result.circuit && canInsertIntoCircuit(selectedNode) && <button type="button" onClick={() => insertIntoCircuit(selectedNode, nearestWire(result.circuit!, selectedNode.position.y), selectedNode.position.x, [selectedNode.id])} data-tip={'Add to circuit\nConverts this spider into the equivalent gate on the nearest qubit wire, updating the code and gate view.'}>Add to circuit on q[{nearestWire(result.circuit, selectedNode.position.y)}]</button>}
+                            {canDelete(selectedNode.id) && <button type="button" className="remove-node" onClick={() => deleteNodes([selectedNode.id])}>{selectedNode.custom ? 'Delete node' : 'Delete gate'}</button>}
+                          </div>
+                        </> : <p className="inspector-placeholder">Select a spider to inspect its phase, connections, and spatial position. Double-click a node to connect or delete it.</p>}
+                      </aside>
                     </div>
                     <div className="graph-legend" data-tour="legend">
                       <span data-tip={spiderKindInfo.z} tabIndex={0}><i className="z-dot" /><i className="z-white" /> Z</span>
@@ -507,38 +539,6 @@ function App() {
                       {denotation?.mark && <span className="diagram-mark" data-mark={denotation.mark} data-tip={'Diagram class\nThe class denote already returned.'}>{denotation.mark}</span>}
                       <span>{graph.nodes.filter((node) => node.kind !== 'boundary').length} SPIDERS · {graph.edges.length} CONNECTIONS</span>
                     </div>
-          <div className="inspector" data-tour="inspector">
-            <div className="inspector-heading"><b>{selectedIds.length > 1 ? `${selectedIds.length} nodes selected` : 'Selected node'}</b>{selectedNode && <span className={`node-tag ${selectedNode.kind}`}>{selectedNode.kind.toUpperCase()}</span>}</div>
-            {selectedIds.length > 1 ? <>
-              <p className="inspector-placeholder">Drag any selected node on the canvas to move the whole group. Press Delete to remove the deletable nodes.</p>
-              <div className="inspector-actions">
-                <button type="button" className="remove-node" onClick={() => deleteNodes(selectedIds.filter(canDelete))} disabled={!selectedIds.some(canDelete)}>Delete {selectedIds.filter(canDelete).length} deletable</button>
-                <button type="button" onClick={() => setSelectedIds([])}>Clear selection</button>
-              </div>
-            </> : selectedNode ? <>
-              {nodeFormula && <div className="property-row formula-row"><span>Formula</span><code>{nodeFormula.latex}</code></div>}
-              <div className="property-row"><span>Node ID</span><code>{selectedNode.id}</code></div>
-              {selectedNode.custom
-                ? <div className="property-row"><span>Picturalism symbol</span><code>{pictureElements.find((element) => element.id === selectedNode.symbol)?.label ?? selectedNode.symbol}</code></div>
-                : <div className="property-row"><span>Qubit wire</span><code>q[{selectedNode.wire}]</code></div>}
-              <div className="property-row"><span>3D position</span><code>{selectedNode.position.x.toFixed(1)}, {selectedNode.position.y.toFixed(1)}, {selectedNode.position.z.toFixed(1)}</code></div>
-              {canEditPhase ? <PhaseEditor key={selectedNode.id} diagramOnly={Boolean(selectedNode.custom)} parameter={selectedNode.custom ? selectedNode.phase || '0' : selectedAngle!.parameter} target={selectedNode.custom
-                ? `${selectedNode.kind.toUpperCase()} palette spider only; Add to circuit applies it as a gate`
-                : `Applies to ${selectedAngle!.name === 'p' ? 'Ph' : selectedAngle!.name.toUpperCase()} on q[${selectedNode.wire}]${selectedGate!.name !== selectedAngle!.name ? ` (replaces fixed ${selectedGate!.name.toUpperCase()})` : ''}`} onApply={updatePhase} />
-                : <div className="property-row"><span>{selectedNode.kind === 'x' || selectedNode.kind === 'z' ? 'Fixed phase' : 'Type'}</span><code>{selectedNode.phase || selectedNode.label || selectedNode.kind}</code></div>}
-              {!canEditPhase && selectedGate && (selectedNode.kind === 'x' || selectedNode.kind === 'z') && <p className="editor-hint">{selectedGate.name === 'ry' ? 'Ry basis-change phases are fixed. Select the central X spider to edit the Ry angle.' : `This phase belongs to the ${selectedGate.name.toUpperCase()} decomposition and is not independently editable.`}</p>}
-              <div className="property-row"><span>Connected edges</span><code>{graph.edges.filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id).length}</code></div>
-              {added.edges.filter((edge) => edge.id.startsWith('pic-edge-') && (edge.source === selectedNode.id || edge.target === selectedNode.id)).map((edge) => <div className="property-row" key={edge.id}>
-                <code>{edge.source === selectedNode.id ? edge.target : edge.source}</code>
-                <button type="button" aria-label={`Disconnect ${edge.source} from ${edge.target}`} onClick={() => updateActive((circuit) => ({ added: { ...circuit.added, edges: circuit.added.edges.filter((item) => item.id !== edge.id) } }))}>Disconnect</button>
-              </div>)}
-              <div className="inspector-actions">
-                <button type="button" onClick={() => canvasApi.current?.startConnection(selectedNode.id)} data-tip={'Connect\nStart a wire from this node, then click a target node.'}>Connect from here</button>
-                {result.circuit && canInsertIntoCircuit(selectedNode) && <button type="button" onClick={() => insertIntoCircuit(selectedNode, nearestWire(result.circuit!, selectedNode.position.y), selectedNode.position.x, [selectedNode.id])} data-tip={'Add to circuit\nConverts this spider into the equivalent gate on the nearest qubit wire, updating the code and gate view.'}>Add to circuit on q[{nearestWire(result.circuit, selectedNode.position.y)}]</button>}
-                {canDelete(selectedNode.id) && <button type="button" className="remove-node" onClick={() => deleteNodes([selectedNode.id])}>{selectedNode.custom ? 'Delete node' : 'Delete gate'}</button>}
-              </div>
-            </> : <p className="inspector-placeholder">Select a spider to inspect its phase, connections, and spatial position. Double-click a node to connect or delete it.</p>}
-          </div>
                   </section>}
         </section>
       </section>
