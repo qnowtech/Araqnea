@@ -250,12 +250,38 @@ Cómo validar
 
 ---
 
+## Lienzo: seleccionar vs moverse
+
+El botón izquierdo edita el grafo; el del medio mueve la cámara. Así se puede comparar A/B sin arrastrar nodos por accidente.
+
+### 10/10
+
+Requisitos
+
+- [x] Clic en un nodo lo selecciona; arrastrar un nodo ya seleccionado lo mueve (y el grupo si hay varios).
+- [x] Arrastrar en vacío hace caja de selección; Ctrl/Cmd suma a la selección.
+- [x] Rueda central sostenida (middle-drag) pannea el espacio; el cursor pasa a manito.
+- [x] En 3D, Alt + clic izquierdo orbitan; el izquierdo solo no pannea ni rota.
+- [x] Cursores distintos: pointer (hover), crosshair (caja), move (nodos), grab/grabbing (pan).
+
+Qué esperar
+
+- [x] Clic en un nodo no mueve la cámara.
+- [x] Middle-drag mueve la vista y deja la selección igual.
+- [x] Caja sobre varios nodos permite arrastrar el grupo después.
+
+Cómo validar
+
+- [x] El tour y el README describen clic → seleccionar, left-drag seleccionado → mover, empty left-drag → caja, middle-drag → pan.
+
+---
+
 ## Backlog de UI (pendiente)
 
 - [ ] Añadir logo de Qnow.
 - [ ] Permitir Ctrl+Z (deshacer) en el canvas.
-- [ ] Cambiar el cursor a manito al arrastrar para mover el lienzo.
-- [ ] Solo debería poder moverse con la rueda central o con la manito.
+- [x] Cambiar el cursor a manito al arrastrar para mover el lienzo.
+- [x] Solo debería poder moverse con la rueda central o con la manito.
 - [ ] Capacidad para desconectar y reconectar cúbits.
 - [ ] Limpiar / clearer el botón de elementos.
 - [ ] Arreglar la fórmula `(|000\rangle+|111\rangle)/\sqrt{2}`.

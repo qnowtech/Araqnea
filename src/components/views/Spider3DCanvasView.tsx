@@ -72,8 +72,7 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
   const [projection, setProjection] = useState<'3d' | '2d'>('2d')
   const [bookTime, setBookTime] = useState(true)
   const [dropActive, setDropActive] = useState(false)
-  const [boxMode, setBoxMode] = useState(false)
-  const boxModeRef = useRef(false)
+  const [canvasCursor, setCanvasCursor] = useState<'default' | 'pointer' | 'crosshair' | 'grab' | 'grabbing' | 'move'>('default')
   const [marquee, setMarquee] = useState<Marquee>()
   const [hoverId, setHoverId] = useState<string>()
   const [connectionSource, setConnectionSource] = useState<string>()
@@ -145,9 +144,6 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
   useEffect(() => {
     selectedRef.current = new Set(selectedIds)
   }, [selectedIds])
-  useEffect(() => {
-    boxModeRef.current = boxMode
-  }, [boxMode])
   useEffect(() => () => window.clearTimeout(messageTimer.current), [])
   useEffect(() => {
     if (connectionRef.current.source && !graph.nodes.some((node) => node.id === connectionRef.current.source)) cancelConnection()
@@ -218,7 +214,10 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
     const navigation = new OrbitControls(camera, renderer.domElement)
     navigation.target.copy(target)
     navigation.enableRotate = !is2D
-    navigation.mouseButtons.LEFT = is2D ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE
+    // Camera: middle = pan; left = select / move-if-selected / box; Alt+left orbits in 3D.
+    navigation.mouseButtons.LEFT = -1 as THREE.MOUSE
+    navigation.mouseButtons.MIDDLE = THREE.MOUSE.PAN
+    navigation.mouseButtons.RIGHT = -1 as THREE.MOUSE
     navigation.touches.ONE = is2D ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE
     navigation.minDistance = 2
     navigation.maxDistance = distance * 2
@@ -432,19 +431,80 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
       const point = mesh.position.clone().project(camera)
       return { x: (point.x + 1) * host.clientWidth / 2, y: (1 - point.y) * host.clientHeight / 2, z: point.z }
     }
+    const worldRadiusOf = (id: string) => {
+      const kind = nodeMap.get(id)?.kind
+      if (kind === 'boundary') return 0.2
+      if (kind === 'hadamard') return 0.46
+      return 0.62
+    }
+    const cameraRight = new THREE.Vector3()
+    const marqueeHits = (mesh: THREE.Object3D, left: number, right: number, top: number, bottom: number) => {
+      const screen = screenOf(mesh)
+      if (Math.abs(screen.z) > 1) return false
+      const radius = worldRadiusOf(mesh.userData.nodeId as string)
+      cameraRight.setFromMatrixColumn(camera.matrixWorld, 0).normalize()
+      const edge = mesh.position.clone().addScaledVector(cameraRight, radius).project(camera)
+      const edgeX = (edge.x + 1) * host.clientWidth / 2
+      const edgeY = (1 - edge.y) * host.clientHeight / 2
+      const pixelRadius = Math.max(4, Math.hypot(edgeX - screen.x, edgeY - screen.y))
+      const nearestX = Math.min(right, Math.max(left, screen.x))
+      const nearestY = Math.min(bottom, Math.max(top, screen.y))
+      const dx = screen.x - nearestX
+      const dy = screen.y - nearestY
+      return dx * dx + dy * dy <= pixelRadius * pixelRadius
+    }
     const hostPoint = (event: PointerEvent) => {
       const rect = host.getBoundingClientRect()
       return { x: event.clientX - rect.left, y: event.clientY - rect.top }
     }
     let drag: { ids: string[]; start: THREE.Vector3; origins: Map<string, THREE.Vector3>; moved: boolean } | undefined
-    let box: { x0: number; y0: number; x1: number; y1: number; additive: boolean } | undefined
-    let press: { x: number; y: number } | undefined
+    let box: { x0: number; y0: number; x1: number; y1: number; additive: boolean; fromNode: boolean } | undefined
+    let altOrbit = false
+    let panning = false
+    // OrbitControls writes an inline cursor on the canvas; set it here so grab/grabbing actually show.
+    const setCursor = (cursor: 'default' | 'pointer' | 'crosshair' | 'grab' | 'grabbing' | 'move') => {
+      renderer.domElement.style.cursor = cursor
+      setCanvasCursor(cursor)
+    }
+    const idleCursor = () => setCursor(hoverRef.current && !connectionRef.current.source ? 'pointer' : 'default')
+    setCursor('default')
     const hitNode = (event: PointerEvent | MouseEvent) => {
       updatePointer(event as PointerEvent)
       return raycaster.intersectObjects(pickables, false)[0]?.object as THREE.Mesh | undefined
     }
+    const beginNodeDrag = (event: PointerEvent, hit: THREE.Mesh) => {
+      const id = hit.userData.nodeId as string
+      if (!movable(id) || !selectedRef.current.has(id)) return false
+      navigation.enabled = false
+      renderer.domElement.setPointerCapture(event.pointerId)
+      const ids = [...selectedRef.current].filter(movable)
+      dragPlane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), hit.position)
+      if (!raycaster.ray.intersectPlane(dragPlane, dragPoint)) return false
+      drag = { ids, start: dragPoint.clone(), origins: new Map(ids.map((item) => [item, nodeMeshes.get(item)!.position.clone()])), moved: false }
+      setCursor('move')
+      return true
+    }
+    const blockMiddleBrowser = (event: Event) => {
+      const button = 'button' in event ? (event as MouseEvent).button : -1
+      if (button === 1) event.preventDefault()
+    }
     const down = (event: PointerEvent) => {
-      if (event.button !== 0 || event.shiftKey) return
+      if (event.button === 1) {
+        event.preventDefault()
+        panning = true
+        setCursor('grabbing')
+        return
+      }
+      if (event.button === 2) {
+        event.preventDefault()
+        return
+      }
+      if (event.button !== 0) return
+      if (!is2D && event.altKey) {
+        navigation.mouseButtons.LEFT = THREE.MOUSE.ROTATE
+        altOrbit = true
+        return
+      }
       const hit = hitNode(event)
       if (connectionRef.current.source) {
         if (!hit) {
@@ -456,39 +516,33 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
         return
       }
       if (hit) {
-        navigation.enabled = false
         const id = hit.userData.nodeId as string
-        renderer.domElement.setPointerCapture(event.pointerId)
-        if (event.ctrlKey || event.metaKey) {
+        const additive = event.ctrlKey || event.metaKey
+        if (additive) {
           const next = new Set(selectedRef.current)
           if (next.has(id)) next.delete(id)
           else next.add(id)
           selectedRef.current = next
           callbacks.current.onSelectionChange([...next])
+        } else if (selectedRef.current.has(id) && movable(id)) {
+          beginNodeDrag(event, hit)
           return
-        }
-        if (!selectedRef.current.has(id)) {
+        } else {
           selectedRef.current = new Set([id])
           callbacks.current.onSelectionChange([id])
         }
-        if (!movable(id)) return
-        const ids = [...selectedRef.current].filter(movable)
-        dragPlane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), hit.position)
-        if (!raycaster.ray.intersectPlane(dragPlane, dragPoint)) return
-        drag = { ids, start: dragPoint.clone(), origins: new Map(ids.map((item) => [item, nodeMeshes.get(item)!.position.clone()])), moved: false }
-        return
       }
-      if (boxModeRef.current || event.ctrlKey || event.metaKey) {
-        navigation.enabled = false
-        const point = hostPoint(event)
-        box = { x0: point.x, y0: point.y, x1: point.x, y1: point.y, additive: event.ctrlKey || event.metaKey }
-        setMarquee({ x0: point.x, y0: point.y, x1: point.x, y1: point.y })
-        renderer.domElement.setPointerCapture(event.pointerId)
-        return
-      }
-      press = { x: event.clientX, y: event.clientY }
+      navigation.enabled = false
+      renderer.domElement.setPointerCapture(event.pointerId)
+      const point = hostPoint(event)
+      box = { x0: point.x, y0: point.y, x1: point.x, y1: point.y, additive: event.ctrlKey || event.metaKey, fromNode: Boolean(hit) }
+      setMarquee({ x0: point.x, y0: point.y, x1: point.x, y1: point.y })
+      setCursor('crosshair')
     }
     const move = (event: PointerEvent) => {
+      if (panning || (event.buttons & 4)) {
+        setCursor('grabbing')
+      }
       if (connectionRef.current.source) {
         updatePointer(event)
         const source = nodeMeshes.get(connectionRef.current.source)
@@ -505,6 +559,7 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
           for (const id of drag.ids) nodeMeshes.get(id)?.position.copy(drag.origins.get(id)!).add(delta)
           refreshEdges()
         }
+        setCursor('move')
         return
       }
       if (box) {
@@ -512,6 +567,7 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
         box.x1 = point.x
         box.y1 = point.y
         setMarquee({ x0: box.x0, y0: box.y0, x1: box.x1, y1: box.y1 })
+        setCursor('crosshair')
         return
       }
       if (event.buttons) return
@@ -520,8 +576,17 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
         hoverRef.current = hovered
         setHoverId(hovered)
       }
+      if (!panning && !altOrbit) setCursor(hovered && !connectionRef.current.source ? 'pointer' : 'default')
     }
     const up = (event: PointerEvent) => {
+      if (altOrbit) {
+        navigation.mouseButtons.LEFT = -1 as THREE.MOUSE
+        altOrbit = false
+      }
+      if (panning || event.button === 1) {
+        panning = false
+        idleCursor()
+      }
       if (drag?.moved) {
         const moves: Record<string, Vector3> = {}
         for (const id of drag.ids) {
@@ -537,27 +602,22 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
         const top = Math.min(box.y0, box.y1)
         const bottom = Math.max(box.y0, box.y1)
         if (right - left > 4 || bottom - top > 4) {
-          const inside = [...nodeMeshes].filter(([, mesh]) => {
-            const screen = screenOf(mesh)
-            return screen.x >= left && screen.x <= right && screen.y >= top && screen.y <= bottom && Math.abs(screen.z) <= 1
-          }).map(([id]) => id)
+          const inside = [...nodeMeshes]
+            .filter(([, mesh]) => marqueeHits(mesh, left, right, top, bottom))
+            .map(([id]) => id)
           const next = box.additive ? [...new Set([...selectedRef.current, ...inside])] : inside
           selectedRef.current = new Set(next)
           callbacks.current.onSelectionChange(next)
-        } else if (!box.additive) {
+        } else if (!box.fromNode && !box.additive) {
           selectedRef.current = new Set()
           callbacks.current.onSelectionChange([])
         }
         setMarquee(undefined)
       }
-      if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) < 4 && selectedRef.current.size) {
-        selectedRef.current = new Set()
-        callbacks.current.onSelectionChange([])
-      }
       drag = undefined
       box = undefined
-      press = undefined
       navigation.enabled = true
+      if (!panning) idleCursor()
     }
     const doubleClick = (event: MouseEvent) => {
       const hit = hitNode(event)
@@ -569,6 +629,7 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
         hoverRef.current = undefined
         setHoverId(undefined)
       }
+      if (!drag && !box && !panning) setCursor('default')
     }
     const contextMenu = (event: Event) => event.preventDefault()
     renderer.domElement.addEventListener('pointerdown', down, { capture: true })
@@ -578,6 +639,8 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
     renderer.domElement.addEventListener('pointerleave', leave)
     renderer.domElement.addEventListener('dblclick', doubleClick)
     renderer.domElement.addEventListener('contextmenu', contextMenu)
+    renderer.domElement.addEventListener('mousedown', blockMiddleBrowser, { capture: true })
+    renderer.domElement.addEventListener('auxclick', blockMiddleBrowser)
 
     const clock = new THREE.Clock()
     let frame = 0
@@ -653,6 +716,8 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
       renderer.domElement.removeEventListener('pointerleave', leave)
       renderer.domElement.removeEventListener('dblclick', doubleClick)
       renderer.domElement.removeEventListener('contextmenu', contextMenu)
+      renderer.domElement.removeEventListener('mousedown', blockMiddleBrowser, { capture: true })
+      renderer.domElement.removeEventListener('auxclick', blockMiddleBrowser)
       controls.current = null
       scene.traverse((object) => {
         if (object instanceof THREE.Mesh) {
@@ -711,7 +776,7 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
     <div
       ref={hostRef}
       data-tour="canvas"
-      className={`spider-3d-canvas ${dropActive ? 'drop-active' : ''} ${boxMode ? 'box-mode' : ''} ${hoverId && !connecting ? 'node-hover' : ''}`}
+      className={`spider-3d-canvas cursor-${canvasCursor} ${dropActive ? 'drop-active' : ''}`}
       aria-label={`Interactive ${projection} ZX spider graph`}
     />
     <div className={`canvas-node-handles ${connecting ? 'connecting' : ''} ${joining ? 'joining' : ''}`} aria-label="Canvas nodes">
@@ -746,18 +811,17 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
     {marquee && <div className="canvas-marquee" style={{ left: Math.min(marquee.x0, marquee.x1), top: Math.min(marquee.y0, marquee.y1), width: Math.abs(marquee.x1 - marquee.x0), height: Math.abs(marquee.y1 - marquee.y0) }} />}
     <div className="canvas-toolbar" data-tour="canvas-toolbar" aria-label="Graph canvas controls">
       <button type="button" aria-label="Select all nodes" data-tip={'Select all\nSelects every node so you can move or delete them together. Shortcut: Ctrl/⌘ + A.'} onClick={() => onSelectionChange(graph.nodes.map((node) => node.id))}>All</button>
-      <button type="button" aria-label="Box select" aria-pressed={boxMode} data-tip={'Box select\nDrag a rectangle over empty canvas to select nodes. Ctrl/⌘ + drag also box-selects. Drag any selected node to move the group.'} onClick={() => setBoxMode((current) => !current)}>▭ Box</button>
       {(connecting || joining) && <button type="button" aria-label={connecting ? 'Cancel connection' : 'Cancel join'} onClick={() => connecting ? cancelConnection('Connection cancelled.') : onCancelJoin?.()}>Cancel</button>}
       <span />
       <button type="button" aria-label="Zoom in" data-tip="Zoom in" onClick={() => controls.current?.zoom(1.2)}>+</button>
       <button type="button" aria-label="Zoom out" data-tip="Zoom out" onClick={() => controls.current?.zoom(1 / 1.2)}>−</button>
       <button type="button" aria-label="Reset camera" data-tip="Reset camera" onClick={() => controls.current?.reset()}>⌂</button>
       <button type="button" aria-label={bookTime ? 'Time upward. Switch to left to right' : 'Time left to right. Switch to upward'} aria-pressed={bookTime} data-tip={bookTime ? 'Book orientation\nTime runs upward. Switching back keeps the stored diagram, only the view changes.' : 'App orientation\nTime runs left to right. The book runs time upward; this button shows that view.'} onClick={() => { cancelConnection(); setBookTime((current) => !current) }}>{bookTime ? '↑' : '→'}</button>
-      <button type="button" aria-label={projection === '3d' ? 'Switch to 2D view' : 'Switch to 3D view'} data-tip={projection === '3d' ? 'Flat 2D view\nOrthographic layout, easier for selecting and wiring.' : '3D view\nOrbit around the spider graph.'} onClick={() => { cancelConnection(); setProjection((current) => current === '3d' ? '2d' : '3d') }}>
+      <button type="button" aria-label={projection === '3d' ? 'Switch to 2D view' : 'Switch to 3D view'} data-tip={projection === '3d' ? 'Flat 2D view\nOrthographic layout, easier for selecting and wiring.' : '3D view\nMiddle-drag pans. Alt + left-drag orbits. Left-drag a selected spider to move it.'} onClick={() => { cancelConnection(); setProjection((current) => current === '3d' ? '2d' : '3d') }}>
         {projection === '3d' ? '2D' : '3D'}
       </button>
     </div>
     {(connectionMessage || joinGuide) && <div className="canvas-connection-status" role="status">{connectionMessage || joinGuide}{connecting && <span>Palette wires are included in ZX JSON, not OpenQASM.</span>}{!connectionMessage && joining && <span>{joinNodeIds.length ? `${joinNodeIds.length} highlighted ${joinNodeIds.length === 1 ? 'node accepts' : 'nodes accept'} this symbol.` : 'No node on this diagram accepts this symbol yet.'}</span>}</div>}
-    <div className="canvas-hint">{connecting ? 'CLICK A NODE TO CONNECT · × DELETES · ESC CANCELS' : joining ? 'CLICK A HIGHLIGHTED NODE TO PLACE AND CONNECT · ESC CANCELS' : `${boxMode ? 'DRAG TO BOX-SELECT' : projection === '3d' ? 'DRAG ORBIT · SHIFT/RIGHT-DRAG PAN' : 'DRAG PAN'} · ${bookTime ? 'TIME UP' : 'TIME TO THE RIGHT'} · DOUBLE-CLICK NODE TO CONNECT OR DELETE · DEL REMOVES SELECTION`}</div>
+    <div className="canvas-hint">{connecting ? 'CLICK A NODE TO CONNECT · × DELETES · ESC CANCELS' : joining ? 'CLICK A HIGHLIGHTED NODE TO PLACE AND CONNECT · ESC CANCELS' : `CLICK TO SELECT · LEFT-DRAG SELECTED TO MOVE · LEFT-DRAG EMPTY TO BOX-SELECT · MIDDLE-DRAG PAN${projection === '3d' ? ' · ALT+LEFT ORBIT' : ''} · ${bookTime ? 'TIME UP' : 'TIME TO THE RIGHT'} · DOUBLE-CLICK NODE TO CONNECT OR DELETE · DEL REMOVES SELECTION`}</div>
   </div>
 }
