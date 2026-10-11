@@ -1,9 +1,11 @@
 import type { ReactElement } from 'react'
+import { circuitLibraryPresets, type CircuitPreset } from '../../data/circuitLibraryPresets'
 import { pictureElementMime, pictureElements, type PictureElementId } from '../../lib/zx-core/pictureElements'
 
 interface SpiderPaletteProps {
   onAdd: (elementId: PictureElementId) => void
   onClear: () => void
+  onPreset: (preset: CircuitPreset) => void
   addedCount: number
 }
 
@@ -36,8 +38,9 @@ const icons: Record<PictureElementId, ReactElement> = {
 }
 
 const groups = [...new Set(pictureElements.map((element) => element.group))]
+const presetGroups = [...new Set(circuitLibraryPresets.map((preset) => preset.group))]
 
-export function SpiderPalette({ onAdd, onClear, addedCount }: SpiderPaletteProps) {
+export function SpiderPalette({ onAdd, onClear, onPreset, addedCount }: SpiderPaletteProps) {
   return <aside className="spider-palette" data-tour="palette" aria-label="Picturalism element palette">
     <div className="spider-palette-heading"><span className="eyebrow">PICTURALISM</span><b>Diagram elements</b></div>
     {groups.map((group) => <section key={group} className="spider-palette-group" aria-label={group}>
@@ -62,6 +65,22 @@ export function SpiderPalette({ onAdd, onClear, addedCount }: SpiderPaletteProps
         </button>)}
       </div>
     </section>)}
+    <section className="spider-palette-group" aria-label="Circuit library">
+      <h3>Circuit library</h3>
+      <p className="spider-palette-hint">Qiskit circuit library, written in the OpenQASM this workbench runs. Barrier, reset and Pauli-product measurement are not in that gate set.</p>
+      <div className="preset-list">
+        {presetGroups.map((group) => <div key={group}>
+          <h4>{group}</h4>
+          {circuitLibraryPresets.filter((preset) => preset.group === group).map((preset) => <button
+            key={preset.id}
+            type="button"
+            data-tip={`${preset.label}\n${preset.detail}\nLoads this circuit into the code, the gates and the spiders.`}
+            aria-label={`Load ${preset.label}`}
+            onClick={() => onPreset(preset)}
+          >{preset.label}</button>)}
+        </div>)}
+      </div>
+    </section>
     <p className="spider-palette-hint">Drag a symbol onto the canvas, or click to place it at the view centre. Drop a spider or Hadamard on a qubit wire to add it to the circuit.</p>
     {addedCount > 0 && <button type="button" className="spider-palette-clear" onClick={onClear}>Clear {addedCount} added element{addedCount === 1 ? '' : 's'}</button>}
   </aside>

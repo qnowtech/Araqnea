@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { isPictureElementId, pictureElementMime, type PictureElementId } from '../../lib/zx-core/pictureElements'
 import { connectionError } from '../../lib/zx-core/connections'
+import { classifyNode, flipPhase, parsePhase, phaseLabel } from '../../lib/zx-core/semantics'
 import type { ZXGraph3D, ZXNode, Vector3 } from '../../types/zx'
 
 export interface SpiderCanvasApi {
@@ -25,24 +26,31 @@ interface Spider3DCanvasViewProps {
 }
 
 const sceneScale = 60
-const asVector = (position: Vector3) => new THREE.Vector3(position.x, position.y, position.z).divideScalar(sceneScale)
-
 function labelSprite(node: ZXNode) {
   const canvas = document.createElement('canvas')
   canvas.width = 256
-  canvas.height = 96
+  canvas.height = 128
   const context = canvas.getContext('2d')!
-  context.font = 'bold 48px monospace'
   context.textAlign = 'center'
   context.shadowColor = '#72ffe1'
   context.shadowBlur = 12
   context.fillStyle = '#f4fbff'
+  context.font = 'bold 42px monospace'
   const text = node.kind === 'boundary' ? node.label ?? '' : `${node.phase}`
-  context.fillText(text, 128, 58)
+  context.fillText(text, 128, 48)
+  const phase = node.kind === 'z' || node.kind === 'x' ? parsePhase(node.phase) : undefined
+  if (phase) {
+    context.beginPath()
+    context.arc(28, 92, 8, 0, Math.PI * 2)
+    context.fill()
+    context.font = 'bold 24px monospace'
+    context.fillStyle = '#9ad7ff'
+    context.fillText(phaseLabel(flipPhase(phase)), 148, 100)
+  }
   const texture = new THREE.CanvasTexture(canvas)
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }))
-  sprite.scale.set(2.2, 0.82, 1)
-  sprite.position.y = node.kind === 'boundary' ? 0.62 : 0.82
+  sprite.scale.set(2.2, 1.1, 1)
+  sprite.position.y = node.kind === 'boundary' ? 0.62 : 0.95
   return sprite
 }
 
@@ -56,7 +64,8 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
   const controls = useRef<{ zoom: (factor: number) => void; reset: () => void; pointAt: (clientX: number, clientY: number) => Vector3; center: () => Vector3 } | null>(null)
   const selectedRef = useRef(new Set(selectedIds))
   const savedView = useRef<{ projection: string; position: THREE.Vector3; target: THREE.Vector3; zoom: number } | null>(null)
-  const [projection, setProjection] = useState<'3d' | '2d'>('3d')
+  const [projection, setProjection] = useState<'3d' | '2d'>('2d')
+  const [bookTime, setBookTime] = useState(false)
   const [dropActive, setDropActive] = useState(false)
   const [boxMode, setBoxMode] = useState(false)
   const boxModeRef = useRef(false)
@@ -163,8 +172,19 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
     const scene = new THREE.Scene()
     scene.background = new THREE.Color('#08111d')
     const is2D = projection === '2d'
+    const shownOf = (position: Vector3) => {
+      const point = bookTime
+        ? new THREE.Vector3(position.y, position.x, position.z)
+        : new THREE.Vector3(position.x, position.y, position.z)
+      return point.divideScalar(sceneScale)
+    }
+    const storedOf = (point: THREE.Vector3, z: number): Vector3 => {
+      const across = point.x * sceneScale
+      const along = point.y * sceneScale
+      return bookTime ? { x: along, y: across, z } : { x: across, y: along, z }
+    }
     const positionFor = (node: ZXNode) => {
-      const position = asVector(node.position)
+      const position = shownOf(node.position)
       if (is2D) position.z = 0
       return position
     }
@@ -193,8 +213,9 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
     navigation.maxDistance = distance * 2
     navigation.minZoom = 0.2
     navigation.maxZoom = 8
+    const viewKey = `${projection}:${bookTime ? 'book' : 'app'}`
     const previousView = savedView.current
-    if (previousView?.projection === projection) {
+    if (previousView?.projection === viewKey) {
       camera.position.copy(previousView.position)
       navigation.target.copy(previousView.target)
       camera.zoom = previousView.zoom
@@ -247,7 +268,7 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
     const nodeMeshes = new Map<string, THREE.Mesh>()
     const nodeHalos = new Map<string, THREE.Mesh>()
     const pickables: THREE.Object3D[] = []
-    const edgeObjects: { from: string; to: string; line: THREE.Mesh; pulse: THREE.Mesh; radius: number }[] = []
+    const edgeObjects: { from: string; to: string; line: THREE.Mesh; pulse?: THREE.Mesh; radius: number; offset: THREE.Vector3 }[] = []
     const nodeMap = new Map(graph.nodes.map((node) => [node.id, node]))
     const previewGeometry = new THREE.BufferGeometry()
     const previewPositions = new THREE.BufferAttribute(new Float32Array(6), 3)
@@ -265,31 +286,43 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
       if (!from || !to) continue
       const start = positionFor(from)
       const end = positionFor(to)
-      const curve = new THREE.CatmullRomCurve3([start, start.clone().lerp(end, 0.5).add(new THREE.Vector3(0, 0.16, 0)), end])
+      const ordinary = classifyNode(from)?.type === 'measure' || classifyNode(to)?.type === 'measure'
+      const direction = end.clone().sub(start)
+      const perpendicular = new THREE.Vector3(-direction.y, direction.x, 0)
+      if (perpendicular.lengthSq() < 1e-8) perpendicular.set(1, 0, 0)
+      perpendicular.setLength(ordinary ? 0.05 : 0)
+      const strokes = ordinary ? [perpendicular, perpendicular.clone().negate()] : [new THREE.Vector3()]
       const radius = edge.hadamard ? 0.035 : 0.022
-      const tube = new THREE.Mesh(
-        new THREE.TubeGeometry(curve, 28, radius, 7, false),
-        new THREE.MeshStandardMaterial({
-          color: edge.hadamard ? '#f8b84e' : '#79a1b9',
-          emissive: edge.hadamard ? '#9b5d12' : '#163e54',
-          emissiveIntensity: 1.2,
-          metalness: 0.35,
-          roughness: 0.35,
-        }),
-      )
-      scene.add(tube)
-      const pulse = new THREE.Mesh(
-        new THREE.SphereGeometry(0.075, 12, 12),
-        new THREE.MeshBasicMaterial({ color: edge.hadamard ? '#ffe39b' : '#a3fff0' }),
-      )
-      scene.add(pulse)
-      edgeObjects.push({ from: edge.source, to: edge.target, line: tube, pulse, radius })
+      strokes.forEach((offset, index) => {
+        const strokeStart = start.clone().add(offset)
+        const strokeEnd = end.clone().add(offset)
+        const curve = new THREE.CatmullRomCurve3([strokeStart, strokeStart.clone().lerp(strokeEnd, 0.5).add(new THREE.Vector3(0, 0.16, 0)), strokeEnd])
+        const tube = new THREE.Mesh(
+          new THREE.TubeGeometry(curve, 28, radius, 7, false),
+          new THREE.MeshStandardMaterial({
+            color: edge.hadamard ? '#f8b84e' : '#79a1b9',
+            emissive: edge.hadamard ? '#9b5d12' : '#163e54',
+            emissiveIntensity: 1.2,
+            metalness: 0.35,
+            roughness: 0.35,
+          }),
+        )
+        scene.add(tube)
+        const pulse = index === 0 ? new THREE.Mesh(
+          new THREE.SphereGeometry(0.075, 12, 12),
+          new THREE.MeshBasicMaterial({ color: edge.hadamard ? '#ffe39b' : '#a3fff0' }),
+        ) : undefined
+        if (pulse) scene.add(pulse)
+        edgeObjects.push({ from: edge.source, to: edge.target, line: tube, pulse, radius, offset })
+      })
     }
     const refreshEdges = () => {
       for (const edge of edgeObjects) {
-        const start = nodeMeshes.get(edge.from)?.position
-        const end = nodeMeshes.get(edge.to)?.position
-        if (!start || !end) continue
+        const from = nodeMeshes.get(edge.from)?.position
+        const to = nodeMeshes.get(edge.to)?.position
+        if (!from || !to) continue
+        const start = from.clone().add(edge.offset)
+        const end = to.clone().add(edge.offset)
         edge.line.geometry.dispose()
         const middle = start.clone().lerp(end, 0.5).add(new THREE.Vector3(0, 0.16, 0))
         edge.line.geometry = new THREE.TubeGeometry(
@@ -315,6 +348,19 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
         metalness: 0.22,
       })
       const mesh = new THREE.Mesh(geometry, material)
+      if (node.kind === 'z' || node.kind === 'x') {
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(0.62, 0.045, 8, 24),
+          new THREE.MeshStandardMaterial({
+            color: node.kind === 'z' ? '#f4fbff' : '#8b97a6',
+            emissive: node.kind === 'z' ? '#d7e7f5' : '#4d5660',
+            emissiveIntensity: 0.6,
+            roughness: 0.35,
+          }),
+        )
+        ring.rotation.x = Math.PI / 2
+        mesh.add(ring)
+      }
       mesh.position.copy(positionFor(node))
       mesh.userData.nodeId = node.id
       mesh.add(labelSprite(node))
@@ -357,7 +403,7 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
       pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1)
       raycaster.setFromCamera(pointer, camera)
     }
-    const toGraph = (point: THREE.Vector3): Vector3 => ({ x: point.x * sceneScale, y: point.y * sceneScale, z: is2D ? 0 : point.z * sceneScale })
+    const toGraph = (point: THREE.Vector3): Vector3 => storedOf(point, is2D ? 0 : point.z * sceneScale)
     controls.current!.center = () => toGraph(navigation.target)
     controls.current!.pointAt = (clientX, clientY) => {
       const rect = renderer.domElement.getBoundingClientRect()
@@ -470,7 +516,7 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
         for (const id of drag.ids) {
           const position = nodeMeshes.get(id)!.position
           const originalZ = nodeMap.get(id)?.position.z ?? position.z * sceneScale
-          moves[id] = { x: position.x * sceneScale, y: position.y * sceneScale, z: is2D ? originalZ : position.z * sceneScale }
+          moves[id] = storedOf(position, is2D ? originalZ : position.z * sceneScale)
         }
         callbacks.current.onMove(moves)
       }
@@ -528,10 +574,10 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
       frame = requestAnimationFrame(render)
       const time = clock.getElapsedTime()
       for (const [index, edge] of edgeObjects.entries()) {
-        const start = nodeMeshes.get(edge.from)?.position
-        const end = nodeMeshes.get(edge.to)?.position
-        if (!start || !end) continue
-        edge.pulse.position.lerpVectors(start, end, (time * 0.35 + index * 0.21) % 1)
+        const from = nodeMeshes.get(edge.from)?.position
+        const to = nodeMeshes.get(edge.to)?.position
+        if (!from || !to || !edge.pulse) continue
+        edge.pulse.position.lerpVectors(from.clone().add(edge.offset), to.clone().add(edge.offset), (time * 0.35 + index * 0.21) % 1)
       }
       const connection = connectionRef.current
       const screenNodes = new Map<string, { x: number; y: number; z: number }>()
@@ -587,7 +633,7 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
     return () => {
       cancelAnimationFrame(frame)
       observer.disconnect()
-      savedView.current = { projection, position: camera.position.clone(), target: navigation.target.clone(), zoom: camera.zoom }
+      savedView.current = { projection: viewKey, position: camera.position.clone(), target: navigation.target.clone(), zoom: camera.zoom }
       navigation.dispose()
       renderer.domElement.removeEventListener('pointerdown', down, { capture: true })
       renderer.domElement.removeEventListener('pointermove', move)
@@ -615,7 +661,7 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
       previewMaterial.dispose()
       host.removeChild(renderer.domElement)
     }
-  }, [graph, projection, cancelConnection, startConnection])
+  }, [graph, projection, bookTime, cancelConnection, startConnection])
 
   useEffect(() => {
     if (!apiRef) return
@@ -693,11 +739,12 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
       <button type="button" aria-label="Zoom in" data-tip="Zoom in" onClick={() => controls.current?.zoom(1.2)}>+</button>
       <button type="button" aria-label="Zoom out" data-tip="Zoom out" onClick={() => controls.current?.zoom(1 / 1.2)}>−</button>
       <button type="button" aria-label="Reset camera" data-tip="Reset camera" onClick={() => controls.current?.reset()}>⌂</button>
-      <button type="button" aria-label={projection === '3d' ? 'Switch to 2D view' : 'Switch to 3D view'} aria-pressed={projection === '2d'} data-tip={projection === '3d' ? 'Flat 2D view\nOrthographic layout, easier for selecting and wiring.' : '3D view\nOrbit around the spider graph.'} onClick={() => { cancelConnection(); setProjection((current) => current === '3d' ? '2d' : '3d') }}>
+      <button type="button" aria-label={bookTime ? 'Time upward. Switch to left to right' : 'Time left to right. Switch to upward'} aria-pressed={bookTime} data-tip={bookTime ? 'Book orientation\nTime runs upward. Switching back keeps the stored diagram, only the view changes.' : 'App orientation\nTime runs left to right. The book runs time upward; this button shows that view.'} onClick={() => { cancelConnection(); setBookTime((current) => !current) }}>{bookTime ? '↑' : '→'}</button>
+      <button type="button" aria-label={projection === '3d' ? 'Switch to 2D view' : 'Switch to 3D view'} data-tip={projection === '3d' ? 'Flat 2D view\nOrthographic layout, easier for selecting and wiring.' : '3D view\nOrbit around the spider graph.'} onClick={() => { cancelConnection(); setProjection((current) => current === '3d' ? '2d' : '3d') }}>
         {projection === '3d' ? '2D' : '3D'}
       </button>
     </div>
     {connectionMessage && <div className="canvas-connection-status" role="status">{connectionMessage}{connecting && <span>Palette wires are included in ZX JSON, not OpenQASM.</span>}</div>}
-    <div className="canvas-hint">{connecting ? 'CLICK A NODE TO CONNECT · × DELETES · ESC CANCELS' : `${boxMode ? 'DRAG TO BOX-SELECT' : projection === '3d' ? 'DRAG ORBIT · SHIFT/RIGHT-DRAG PAN' : 'DRAG PAN'} · DOUBLE-CLICK NODE TO CONNECT OR DELETE · DEL REMOVES SELECTION`}</div>
+    <div className="canvas-hint">{connecting ? 'CLICK A NODE TO CONNECT · × DELETES · ESC CANCELS' : `${boxMode ? 'DRAG TO BOX-SELECT' : projection === '3d' ? 'DRAG ORBIT · SHIFT/RIGHT-DRAG PAN' : 'DRAG PAN'} · ${bookTime ? 'TIME UP' : 'TIME TO THE RIGHT'} · DOUBLE-CLICK NODE TO CONNECT OR DELETE · DEL REMOVES SELECTION`}</div>
   </div>
 }

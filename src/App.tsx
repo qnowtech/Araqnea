@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CircuitPreset } from './data/circuitLibraryPresets'
 import { gateInfo, spiderKindInfo } from './data/gateInfo'
 import { GuidedTour } from './components/GuidedTour'
 import { HoverTooltip } from './components/HoverTooltip'
@@ -7,11 +8,16 @@ import { CodeView } from './components/views/CodeView'
 import { GateCircuitView } from './components/views/GateCircuitView'
 import { Spider3DCanvasView, type SpiderCanvasApi } from './components/views/Spider3DCanvasView'
 import { SpiderPalette } from './components/views/SpiderPalette'
+import { CityPlot, Histogram } from './components/views/RunCharts'
 import { toPennyLane, toQasm, toQasm3, toQiskitPython, toZXJson } from './lib/exporters/circuitExporters'
 import { toQollabCss, toQollabHtml, toQollabJs } from './lib/exporters/qollabExporter'
 import { parseQasm } from './lib/parsers/qasm2Parser'
 import { createCircuit, defaultTitle, loadLibrary, saveLibrary, uniqueTitle, type SavedCircuit } from './lib/storage/circuitLibrary'
-import { canInsertIntoCircuit, insertSpiderGate, nearestWire, validateSync, wireAt } from './lib/sync/circuitSync'
+import { canInsertIntoCircuit, insertSpiderGate, nearestWire, wireAt } from './lib/sync/circuitSync'
+import { explain } from './lib/zx-core/latex'
+import { run, type RunResult } from './lib/zx-core/run'
+import { flipPhase, parsePhase, phaseLabel } from './lib/zx-core/semantics'
+import { denote } from './lib/zx-core/validate'
 import { buildPictureElement, pictureElements, type PictureElementId } from './lib/zx-core/pictureElements'
 import { columnSpacing, translateCircuit } from './lib/zx-core/translator'
 import { connectionError } from './lib/zx-core/connections'
@@ -25,7 +31,7 @@ interface ExportFile { name: string; text: string; type: string }
 const modeLabels: { id: WorkbenchMode; label: string; icon: string; tip: string }[] = [
   { id: 'code', label: 'Code', icon: '⌘', tip: 'Code\nWrite or paste OpenQASM 2.0. Every edit updates the gates and spiders.' },
   { id: 'gates', label: 'Circuit gates', icon: '▦', tip: 'Circuit gates\nBuild the circuit by clicking or dragging gates onto qubit wires.' },
-  { id: 'spiders', label: '3D spiders', icon: '◉', tip: '3D spiders\nExplore and edit the ZX-calculus diagram of the same circuit.' },
+  { id: 'spiders', label: 'Spiders', icon: '◉', tip: 'Spiders\nExplore and edit the ZX-calculus diagram of the same circuit. The canvas opens flat; the toolbar switches to 3D.' },
 ]
 
 const exportFormats: { id: ExportFormat; label: string; detail: string }[] = [
@@ -63,6 +69,8 @@ function App() {
   const [showAbout, setShowAbout] = useState(false)
   const [showTour, setShowTour] = useState(() => !tourCompleted())
   const [notice, setNotice] = useState('')
+  const [token, setToken] = useState('')
+  const [execution, setExecution] = useState<RunResult | null>(null)
   const noticeTimer = useRef(0)
   const addedCounter = useRef(0)
   const canvasApi = useRef<SpiderCanvasApi>(null)
@@ -98,10 +106,18 @@ function App() {
       ...(baseGraph.numbers?.length ? { numbers: baseGraph.numbers } : {}),
     }
   }, [baseGraph, positions, added])
-  const sync = useMemo(() => result.circuit ? validateSync(result.circuit, graph) : undefined, [result.circuit, graph])
   const selectedId = selectedIds.at(-1)
   const selectedNode = selectedIds.length === 1 ? graph.nodes.find((node) => node.id === selectedId) : undefined
   const addedElementCount = new Set(added.nodes.map((node) => node.id.split('-')[0])).size
+  const diagramFormula = useMemo(() => graph.nodes.length ? explain(graph) : undefined, [graph])
+  const denotation = useMemo(() => graph.nodes.length ? denote(graph) : undefined, [graph])
+  const nodeFormula = useMemo(() => selectedNode ? explain(graph, selectedNode.id) : undefined, [graph, selectedNode])
+  const diagramKey = useMemo(() => JSON.stringify({
+    nodes: graph.nodes.map((node) => [node.id, node.kind, node.phase, node.label, node.wire]),
+    edges: graph.edges.map((edge) => [edge.source, edge.target, edge.hadamard]),
+  }), [graph])
+  const [ranFor, setRanFor] = useState<string | null>(null)
+  const shownRun = execution && ranFor === diagramKey ? execution : null
 
   const phaseValue = phaseEdit.nodeId === selectedId ? phaseEdit.value : selectedNode?.phase ?? ''
   const updateSource = (value: string) => {
@@ -110,6 +126,15 @@ function App() {
       return { source: value, positions: {}, added: { ...circuit.added, edges: circuit.added.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)) } }
     })
     setSelectedIds([])
+  }
+  const loadPreset = (preset: CircuitPreset) => {
+    updateActive(() => ({ title: preset.label, source: preset.qasm, positions: {}, added: { nodes: [], edges: [] } }))
+    setSelectedIds([])
+  }
+  const execute = (mode: 'simulator' | 'hardware') => {
+    if (!result.circuit) return
+    setRanFor(diagramKey)
+    setExecution(run({ mode, graph, circuit: result.circuit, token: token || undefined }))
   }
   const updateCircuit = (circuit: QuantumCircuit) => updateSource(toQasm(circuit))
   const addGate = (name: GateName, wire: number) => {
@@ -243,6 +268,8 @@ function App() {
     const kindName = { z: 'Z spider', x: 'X spider', hadamard: 'Hadamard box', boundary: 'Boundary' }[node.kind]
     const heading = node.kind === 'z' || node.kind === 'x' ? `${kindName} · phase ${node.phase || '0'}` : node.kind === 'boundary' ? `${kindName} ${node.label ?? ''}`.trim() : kindName
     const lines = [heading, spiderKindInfo[node.kind]]
+    const phase = node.kind === 'z' || node.kind === 'x' ? parsePhase(node.phase) : undefined
+    if (phase) lines.push(`Flip dot: ${phaseLabel(flipPhase(phase))}.`)
     if (node.custom) {
       const element = pictureElements.find((item) => item.id === node.symbol)
       if (element) lines.push(`Palette: ${element.label} — ${element.description}`)
@@ -337,9 +364,8 @@ function App() {
     announce(`Deleted “${title}”.`)
   }
 
-  const syncTip = result.error
-    ? `Out of sync\nThe OpenQASM code has an error. Fix it to resync the gates and spiders.\n${result.error}`
-    : sync ? `${sync.ok ? 'Code, gates and spiders are in sync' : 'Sync problem detected'}\n${sync.checks.map((check) => `${check.ok ? '✓' : '✗'} ${check.label}: ${check.detail}`).join('\n')}${sync.diagramOnly ? `\n• ${sync.diagramOnly} diagram-only node(s) live in the ZX graph only.` : ''}` : ''
+  const statevector = shownRun?.ok && shownRun.mode === 'simulator' && shownRun.method === 'statevector' ? shownRun : undefined
+  const counts = shownRun?.ok && 'counts' in shownRun ? shownRun.counts : undefined
 
   return (
     <main className="app-shell">
@@ -351,7 +377,6 @@ function App() {
           <button type="button" onClick={startTour} data-tip={'Guided tour\nA short walkthrough of the workbench.'}>Tour <span aria-hidden="true">✦</span></button>
           <button type="button" onClick={() => setShowAbout(true)}>About</button>
           <button type="button" onClick={() => { setExportFileIndex(0); setShowExport(true) }} data-tip={'Export\nOpenQASM 2/3, Qiskit, PennyLane, a Qollab project (HTML, CSS, JS) or ZX JSON.'}>Export <span aria-hidden="true">↗</span></button>
-          <button className="run" type="button" onClick={() => setMode('gates')}>▶ Run circuit</button>
         </nav>
       </header>
       <section className="workspace">
@@ -377,9 +402,6 @@ function App() {
               <button type="button" onClick={newCircuit} data-tip={'New circuit\nStart a blank 2-qubit circuit.'}>＋ New</button>
               <button type="button" onClick={duplicateCircuit} data-tip={'Duplicate\nCopy this circuit, including spider layout.'}>⧉</button>
               <button type="button" aria-label="Delete circuit" onClick={deleteCircuit} disabled={library.circuits.length < 2} data-tip={library.circuits.length < 2 ? 'Delete circuit\nKeep at least one circuit.' : 'Delete circuit\nRemove this circuit from the browser.'}>🗑</button>
-              <span className={`status sync-status ${result.error || (sync && !sync.ok) ? 'error' : ''}`} role="status" tabIndex={0} data-tip={syncTip}>
-                {result.error ? `⚠ ${result.error}` : sync?.ok ? '● Synced · code ⇄ gates ⇄ spiders' : '⚠ Out of sync'}
-              </span>
             </div>
           </div>
           <div className="mode-tabs" data-tour="mode-tabs" role="tablist" aria-label="Workbench mode">
@@ -402,10 +424,18 @@ function App() {
                 : <section className="mode-content active-spider-view">
                     <div className="view-title"><div><span className="eyebrow">MODE 03 · ZX GRAPH</span><h2>Spatial spider canvas</h2></div><span>Drop on a wire to add a gate · double-click a node to connect or delete · box-select to move groups</span></div>
                     <div className="spider-stage">
-                      <SpiderPalette onAdd={(id) => addPictureElement(id)} onClear={() => { updateActive(() => ({ added: { nodes: [], edges: [] } })); setSelectedIds((ids) => ids.filter((id) => !added.nodes.some((node) => node.id === id))) }} addedCount={addedElementCount} />
+                      <SpiderPalette onAdd={(id) => addPictureElement(id)} onPreset={loadPreset} onClear={() => { updateActive(() => ({ added: { nodes: [], edges: [] } })); setSelectedIds((ids) => ids.filter((id) => !added.nodes.some((node) => node.id === id))) }} addedCount={addedElementCount} />
                       <Spider3DCanvasView graph={graph} selectedIds={selectedIds} onSelectionChange={(ids) => { setSelectedIds(ids); setPhaseError('') }} onMove={moveNodes} onConnect={connectNodes} onDelete={deleteNodes} canDelete={canDelete} describeNode={describeNode} onDropElement={addPictureElement} apiRef={canvasApi} />
                     </div>
-                    <div className="graph-legend" data-tour="legend"><span data-tip={spiderKindInfo.z} tabIndex={0}><i className="z-dot" /> Z spider</span><span data-tip={spiderKindInfo.x} tabIndex={0}><i className="x-dot" /> X spider</span><span data-tip={spiderKindInfo.hadamard} tabIndex={0}><i className="h-dot" /> Hadamard</span><span>{graph.nodes.filter((node) => node.kind !== 'boundary').length} SPIDERS · {graph.edges.length} CONNECTIONS</span></div>
+                    <div className="graph-legend" data-tour="legend">
+                      <span data-tip={spiderKindInfo.z} tabIndex={0}><i className="z-dot" /><i className="z-white" /> Z</span>
+                      <span data-tip={spiderKindInfo.x} tabIndex={0}><i className="x-dot" /><i className="x-gray" /> X</span>
+                      <span data-tip={spiderKindInfo.hadamard} tabIndex={0}><i className="h-dot" /> Hadamard</span>
+                      <span data-tip={'Quantum wire\nA single stroke. It is not a generator.'} tabIndex={0}><i className="wire-quantum" /> quantum</span>
+                      <span data-tip={'Ordinary wire\nA double stroke, the wire a measurement writes. It is not a generator.'} tabIndex={0}><i className="wire-ordinary" /> ordinary</span>
+                      {denotation?.mark && <span className="diagram-mark" data-mark={denotation.mark} data-tip={'Diagram class\nThe class denote already returned.'}>{denotation.mark}</span>}
+                      <span>{graph.nodes.filter((node) => node.kind !== 'boundary').length} SPIDERS · {graph.edges.length} CONNECTIONS</span>
+                    </div>
           <div className="inspector" data-tour="inspector">
             <div className="inspector-heading"><b>{selectedIds.length > 1 ? `${selectedIds.length} nodes selected` : 'Selected node'}</b>{selectedNode && <span className={`node-tag ${selectedNode.kind}`}>{selectedNode.kind.toUpperCase()}</span>}</div>
             {selectedIds.length > 1 ? <>
@@ -415,6 +445,7 @@ function App() {
                 <button type="button" onClick={() => setSelectedIds([])}>Clear selection</button>
               </div>
             </> : selectedNode ? <>
+              {nodeFormula && <div className="property-row formula-row"><span>Formula</span><code>{nodeFormula.latex}</code></div>}
               <div className="property-row"><span>Node ID</span><code>{selectedNode.id}</code></div>
               {selectedNode.custom
                 ? <div className="property-row"><span>Picturalism symbol</span><code>{pictureElements.find((element) => element.id === selectedNode.symbol)?.label ?? selectedNode.symbol}</code></div>
@@ -441,12 +472,28 @@ function App() {
         </section>
       </section>
       <section className="results" data-tour="overview">
-        <div><span className="eyebrow">CIRCUIT OVERVIEW</span><h2>{title || defaultTitle}</h2></div>
+        <div className="overview-copy">
+          <span className="eyebrow">CIRCUIT OVERVIEW</span>
+          <h2>{title || defaultTitle}</h2>
+          {diagramFormula && <p className="formula"><code>{diagramFormula.latex}</code></p>}
+        </div>
         <div className="result-stats">
           <span><b>{result.circuit?.qubits ?? 0}</b> QUBITS</span>
           <span><b>{result.circuit?.gates.length ?? 0}</b> GATES</span>
           <span><b>{graph.edges.length}</b> WIRES</span>
           <span><b>{library.circuits.length}</b> SAVED CIRCUITS</span>
+        </div>
+        <div className="run-panel">
+          <label className="key-field">Key
+            <input type="password" autoComplete="off" aria-label="Hardware key" value={token} onChange={(event) => setToken(event.target.value)} />
+          </label>
+          <button type="button" onClick={() => execute('simulator')} disabled={!result.circuit}>Simulator</button>
+          <button type="button" onClick={() => execute('hardware')} disabled={!result.circuit}>Hardware</button>
+          {shownRun && !shownRun.ok && <p className="run-error">{shownRun.error}</p>}
+          {statevector && <div className="run-chart"><span>Amplitudes</span><CityPlot amplitudes={statevector.amplitudes} /></div>}
+          {counts && <div className="run-chart"><span>Counts</span><Histogram counts={counts} /></div>}
+          {shownRun?.ok && shownRun.mode === 'hardware' && <p className="run-note">Hardware returns counts only.</p>}
+          {shownRun && <pre className="run-json" aria-label="Run result">{JSON.stringify(shownRun)}</pre>}
         </div>
       </section>
       <footer>Araqnea <span>·</span> ZX-calculus workbench <span>·</span> Built for quantum engineering</footer>
@@ -482,7 +529,7 @@ function App() {
           <ul>
             <li><b>Code</b> — write or load OpenQASM 2.0 presets with instant parsing.</li>
             <li><b>Circuit gates</b> — add and remove gates on qubit wires.</li>
-            <li><b>3D spiders</b> — explore the ZX graph spatially, drag picturalism elements in, box-select and move groups, double-click to connect or delete, and edit phases.</li>
+            <li><b>Spiders</b> — explore the ZX graph, drag picturalism elements in, box-select and move groups, double-click to connect or delete, and edit phases.</li>
             <li><b>Circuits</b> — rename, create and switch between circuits saved in your browser.</li>
             <li><b>Export</b> — OpenQASM 2.0/3.0, Qiskit, PennyLane, a Qollab project (index.html, style.css, main.js), or 3D ZX JSON.</li>
           </ul>
