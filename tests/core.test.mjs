@@ -84,7 +84,10 @@ test('Ph uses u1 in OpenQASM 2, p in OpenQASM 3/Qiskit, and PhaseShift in PennyL
   assert.match(toQasm3(circuit), /p\(pi\/2\) q\[0\]/)
   assert.match(toQiskitPython(circuit), /qc\.p\(pi\/2, 0\)/)
   assert.match(toPennyLane(circuit), /qml\.PhaseShift\(np\.pi\/2, wires=0\)/)
-  assert.match(toQollabJs(circuit), /circuit\.p\(Math\.PI\/2, 0\)/)
+  const qollabJs = toQollabJs(circuit, translateCircuit(circuit))
+  assert.match(qollabJs, /circuit\.p\(Math\.PI\/2, 0\)/)
+  assert.match(qollabJs, /drawCircuit\(\);\ndrawZX\(\);/)
+  assert.match(qollabJs, /const ZX_DATA = \{"nodes":\[/)
   const node = { custom: true, symbol: 'z-phase', kind: 'z', phase: 'π/3' }
   assert.deepEqual(gateForSpider(node), { name: 'p', parameter: 'pi/3' })
 })

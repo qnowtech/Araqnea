@@ -274,7 +274,7 @@ function App() {
     qiskit: [{ name: `${slug(title)}_qiskit.py`, text: toQiskitPython(result.circuit), type: 'text/x-python' }],
     pennylane: [{ name: `${slug(title)}_pennylane.py`, text: toPennyLane(result.circuit), type: 'text/x-python' }],
     qollab: [
-      { name: 'main.js', text: toQollabJs(result.circuit, title), type: 'text/javascript' },
+      { name: 'main.js', text: toQollabJs(result.circuit, graph, title), type: 'text/javascript' },
       { name: 'index.html', text: toQollabHtml(title), type: 'text/html' },
       { name: 'style.css', text: toQollabCss(), type: 'text/css' },
     ],
