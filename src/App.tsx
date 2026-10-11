@@ -3,6 +3,7 @@ import { gateInfo, spiderKindInfo } from './data/gateInfo'
 import { GuidedTour } from './components/GuidedTour'
 import { HoverTooltip } from './components/HoverTooltip'
 import { CircuitPresets } from './components/CircuitPresets'
+import { LatexFormula } from './components/LatexFormula'
 import { PhaseEditor } from './components/PhaseEditor'
 import { editableGateAngle, parameterizedGates } from './lib/angles'
 import { tourSteps } from './data/tourSteps'
@@ -506,7 +507,7 @@ function App() {
                             <button type="button" onClick={() => setSelectedIds([])}>Clear selection</button>
                           </div>
                         </> : selectedNode ? <>
-                          {nodeFormula && <div className="property-row formula-row"><span>Formula</span><code>{nodeFormula.latex}</code></div>}
+                          {nodeFormula && <div className="property-row formula-row"><span>Formula</span><LatexFormula latex={nodeFormula.latex} /></div>}
                           <div className="property-row"><span>Node ID</span><code>{selectedNode.id}</code></div>
                           {selectedNode.custom
                             ? <div className="property-row"><span>Picturalism symbol</span><code>{pictureElements.find((element) => element.id === selectedNode.symbol)?.label ?? selectedNode.symbol}</code></div>
@@ -547,7 +548,7 @@ function App() {
           <div className="overview-copy">
             <span className="eyebrow">CIRCUIT OVERVIEW</span>
             <h2>{title || defaultTitle}</h2>
-            {diagramFormula && <p className="formula"><code>{diagramFormula.latex}</code></p>}
+            {diagramFormula && <p className="formula"><LatexFormula latex={diagramFormula.latex} display /></p>}
           </div>
           <div className="result-stats">
             <span><b>{result.circuit?.qubits ?? 0}</b> QUBITS</span>
