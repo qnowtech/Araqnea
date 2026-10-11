@@ -1,8 +1,11 @@
-import type { ReactElement } from 'react'
+import { useRef, type ReactElement } from 'react'
 import { pictureElementMime, pictureElements, type PictureElementId } from '../../lib/zx-core/pictureElements'
 
 interface SpiderPaletteProps {
   onAdd: (elementId: PictureElementId) => void
+  onJoin: (elementId: PictureElementId) => void
+  joinId?: PictureElementId | null
+  onCancelJoin: () => void
   onClear: () => void
   addedCount: number
 }
@@ -37,8 +40,11 @@ const icons: Record<PictureElementId, ReactElement> = {
 
 const groups = [...new Set(pictureElements.map((element) => element.group))]
 
-export function SpiderPalette({ onAdd, onClear, addedCount }: SpiderPaletteProps) {
-  return <aside className="spider-palette" data-tour="palette" aria-label="Picturalism element palette">
+export function SpiderPalette({ onAdd, onJoin, joinId, onCancelJoin, onClear, addedCount }: SpiderPaletteProps) {
+  const clickTimer = useRef(0)
+  return <aside className="spider-palette" data-tour="palette" aria-label="Picturalism element palette" onKeyDown={(event) => {
+    if (event.key === 'Escape' && joinId) { event.preventDefault(); onCancelJoin() }
+  }}>
     <div className="spider-palette-heading"><span className="eyebrow">PICTURALISM</span><b>Diagram elements</b></div>
     {groups.map((group) => <section key={group} className="spider-palette-group" aria-label={group}>
       <h3>{group}</h3>
@@ -47,22 +53,32 @@ export function SpiderPalette({ onAdd, onClear, addedCount }: SpiderPaletteProps
           key={element.id}
           type="button"
           draggable
-          data-tip={`${element.label}\n${element.description}\nDrag onto the canvas, or click to add at the view centre.`}
+          className={joinId === element.id ? 'armed' : ''}
+          data-tip={`${element.label}\n${element.description}\nClick to place it. Double-click to mark every node it can join.`}
           aria-label={`Add ${element.label}`}
+          aria-pressed={joinId === element.id}
           data-element={element.id}
           onDragStart={(event) => {
             event.dataTransfer.setData(pictureElementMime, element.id)
             event.dataTransfer.setData('text/plain', element.id)
             event.dataTransfer.effectAllowed = 'copy'
           }}
-          onClick={() => onAdd(element.id)}
+          onClick={() => {
+            window.clearTimeout(clickTimer.current)
+            clickTimer.current = window.setTimeout(() => onAdd(element.id), 240)
+          }}
+          onDoubleClick={(event) => {
+            event.preventDefault()
+            window.clearTimeout(clickTimer.current)
+            onJoin(element.id)
+          }}
         >
           <svg viewBox="0 0 40 40" aria-hidden="true">{icons[element.id]}</svg>
           <span>{element.label}</span>
         </button>)}
       </div>
     </section>)}
-    <p className="spider-palette-hint">Drag a symbol onto the canvas, or click to place it at the view centre. Drop a spider or Hadamard on a qubit wire to add it to the circuit.</p>
+    <p className="spider-palette-hint">Click a symbol to place it. Double-click it to mark every node it can join, then click a marked node to place and connect. Drop a spider or Hadamard on a qubit wire to add it to the circuit.</p>
     {addedCount > 0 && <button type="button" className="spider-palette-clear" onClick={onClear}>Clear {addedCount} added element{addedCount === 1 ? '' : 's'}</button>}
   </aside>
 }

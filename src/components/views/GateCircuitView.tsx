@@ -20,19 +20,27 @@ const rowHeight = 64
 interface GateCircuitViewProps {
   circuit: QuantumCircuit
   onAdd: (gate: GateName, wire: number) => void
+  onAddQubit: () => void
+  onAddClassical: () => void
   onRemove: (gateId: string) => void
   onPhase: (gateId: string, parameter: string) => string | undefined
 }
 
-export function GateCircuitView({ circuit, onAdd, onRemove, onPhase }: GateCircuitViewProps) {
+export function GateCircuitView({ circuit, onAdd, onAddQubit, onAddClassical, onRemove, onPhase }: GateCircuitViewProps) {
   const [selectedId, setSelectedId] = useState('')
   const selectedGate = circuit.gates.find((gate) => gate.id === selectedId)
   const angle = selectedGate && editableGateAngle(selectedGate)
   const trackWidth = Math.max(600, circuit.gates.length * columnWidth + columnOffset * 2)
   return (
     <section className="mode-content gate-view">
-      <div className="view-title"><div><span className="eyebrow">MODE 02 · GATES</span><h2>Gate circuit</h2></div><span>{circuit.qubits} qubits · {circuit.gates.length} gates</span></div>
+      <div className="view-title"><div><span className="eyebrow">MODE 02 · GATES</span><h2>Gate circuit</h2></div><span>{circuit.qubits} qubits · {circuit.classicalBits} classical bits · {circuit.gates.length} gates</span></div>
       <div className="gate-palette" aria-label="Gate palette">
+        <div className="register-controls" aria-label="Registers">
+          <span>Qubits <b>{circuit.qubits}</b></span>
+          <button type="button" data-tip={'Add qubit\nAdds one qubit wire, qreg q[n+1], to the circuit.'} onClick={onAddQubit}>+ qubit</button>
+          <span>Classical <b>{circuit.classicalBits}</b></span>
+          <button type="button" data-tip={'Add classical bit\nAdds one bit to the classical register, creg c[n+1].'} onClick={onAddClassical}>+ bit</button>
+        </div>
         {palette.map((gate) => <button
           draggable
           key={gate.name}
@@ -58,10 +66,12 @@ export function GateCircuitView({ circuit, onAdd, onRemove, onPhase }: GateCircu
             </div>
           </div>
         ))}
-        {circuit.classicalBits > 0 && <div className="circuit-row classical-row"><span className="wire-label">c</span><div className="wire-track" /></div>}
+        {Array.from({ length: circuit.classicalBits }, (_, bit) => (
+          <div className="circuit-row classical-row" key={`c${bit}`}><span className="wire-label">c[{bit}]</span><div className="wire-track" /></div>
+        ))}
       </div>
       {selectedGate && angle && <PhaseEditor key={selectedGate.id} parameter={angle.parameter} target={`Applies to ${angle.name === 'p' ? 'Ph' : angle.name.toUpperCase()} on q[${selectedGate.qubits[0]}]${selectedGate.name !== angle.name ? ` (replaces fixed ${selectedGate.name.toUpperCase()})` : ''}`} onApply={(parameter) => onPhase(selectedGate.id, parameter)} />}
-      <p className="editor-hint">Click a palette gate to add it, or drag it onto a qubit wire. Click a circuit X, Y, Z, S, T, Rx, Ry, Rz or Ph gate (or press Enter on it) to edit its angle. Use × to remove a gate.</p>
+      <p className="editor-hint">Use + qubit and + bit to grow the registers. Click a palette gate to add it, or drag it onto a qubit wire. Click a circuit X, Y, Z, S, T, Rx, Ry, Rz or Ph gate (or press Enter on it) to edit its angle. Use × to remove a gate.</p>
     </section>
   )
 }
