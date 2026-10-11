@@ -1,8 +1,6 @@
 import type { CircuitGate, QuantumCircuit } from '../../types/circuit'
-import type { ZXEdge, ZXGraph3D, ZXNode } from '../../types/zx'
-
-const phaseFor = (gate: CircuitGate) =>
-  ({ x: 'π', y: 'π', z: 'π', s: 'π/2', t: 'π/4', rx: gate.parameter ?? 'θ', ry: gate.parameter ?? 'θ', rz: gate.parameter ?? 'θ', p: gate.parameter ?? 'θ' } as Partial<Record<CircuitGate['name'], string>>)[gate.name] ?? '0'
+import type { DiagramScalar, ZXEdge, ZXGraph3D, ZXNode } from '../../types/zx'
+import { drawingOf, phaseLabel, type DrawStep } from './semantics'
 
 export const columnSpacing = 135
 export const wireSpacing = 115
@@ -11,6 +9,7 @@ export const wireY = (wire: number, qubits: number) => (wire - (qubits - 1) / 2)
 export function translateCircuit(circuit: QuantumCircuit): ZXGraph3D {
   const nodes: ZXNode[] = []
   const edges: ZXEdge[] = []
+  const numbers: DiagramScalar[] = []
   const last = Array.from({ length: circuit.qubits }, (_, wire) => {
     const id = `in-${wire}`
     nodes.push({
@@ -18,84 +17,73 @@ export function translateCircuit(circuit: QuantumCircuit): ZXGraph3D {
       kind: 'boundary',
       phase: '',
       wire,
-      label: `|0⟩`,
+      label: '|0⟩',
       position: { x: -150, y: wireY(wire, circuit.qubits), z: 0 },
     })
     return id
   })
-  const connect = (source: string, target: string, hadamard = false) =>
-    edges.push({ id: `e-${edges.length}`, source, target, hadamard })
-  const addNode = (node: ZXNode) => {
-    nodes.push(node)
-    return node.id
+  let column = 0
+  const connect = (source: string, target: string, hadamard = false) => {
+    edges.push({ id: `e-${edges.length}`, source, target, ...(hadamard ? { hadamard: true } : {}) })
   }
-  const spider = (gate: CircuitGate, kind: 'z' | 'x', wire: number, phase: string, column: number, suffix = '') => {
-    const id = `${gate.id}-q${wire}-${kind}${suffix}`
-    const current = addNode({
+  const place = (id: string, kind: ZXNode['kind'], phase: string, wire: number, gateId: string, label?: string) => {
+    nodes.push({
       id,
       kind,
       phase,
       wire,
-      gateId: gate.id,
+      gateId,
+      ...(label ? { label } : {}),
       position: {
         x: column * columnSpacing,
         y: wireY(wire, circuit.qubits),
         z: (column % 2 ? 1 : -1) * (wire % 2 ? 22 : 0),
       },
     })
-    connect(last[wire], current)
-    last[wire] = current
-    return current
+  }
+  const through = (id: string, wire: number) => {
+    connect(last[wire], id)
+    last[wire] = id
+  }
+  const expand = (gate: CircuitGate, step: DrawStep) => {
+    if (step.type === 'measure') {
+      const id = `${gate.id}-measurement`
+      place(id, 'boundary', '', step.wire, gate.id, `M→c[${step.bit}]`)
+      through(id, step.wire)
+      return
+    }
+    if (step.type === 'h') {
+      const id = `${gate.id}-c${column}-hadamard`
+      place(id, 'hadamard', '', step.wire, gate.id)
+      through(id, step.wire)
+      return
+    }
+    if (step.type === 'z' || step.type === 'x') {
+      const id = `${gate.id}-c${column}-q${step.wire}-${step.type}`
+      place(id, step.type, step.text ?? phaseLabel(step.phase), step.wire, gate.id)
+      through(id, step.wire)
+      return
+    }
+    if (step.type !== 'cnot' && step.type !== 'cz') return
+    const controlColor = 'z'
+    const targetColor = step.type === 'cnot' ? 'x' : 'z'
+    const controlId = `${gate.id}-c${column}-q${step.control}-${controlColor}`
+    const targetId = `${gate.id}-c${column}-q${step.target}-${targetColor}`
+    place(controlId, controlColor, '0', step.control, gate.id)
+    place(targetId, targetColor, '0', step.target, gate.id)
+    through(controlId, step.control)
+    through(targetId, step.target)
+    connect(controlId, targetId, step.type === 'cz')
   }
 
-  circuit.gates.forEach((gate, column) => {
-    if (gate.name === 'measure') {
-      const wire = gate.qubits[0]
-      const id = `${gate.id}-measurement`
-      const node = addNode({
-        id,
-        kind: 'boundary',
-        phase: '',
-        wire,
-        label: `M→c[${gate.classicalBit ?? wire}]`,
-        gateId: gate.id,
-        position: { x: column * columnSpacing, y: wireY(wire, circuit.qubits), z: 0 },
-      })
-      connect(last[wire], node)
-      last[wire] = node
-    } else if (gate.name === 'h') {
-      const wire = gate.qubits[0]
-      const id = addNode({
-        id: `${gate.id}-hadamard`,
-        kind: 'hadamard',
-        phase: '',
-        wire,
-        gateId: gate.id,
-        position: { x: column * columnSpacing, y: wireY(wire, circuit.qubits), z: 0 },
-      })
-      connect(last[wire], id)
-      last[wire] = id
-    } else if (gate.name === 'cx' || gate.name === 'cz') {
-      const first = spider(gate, 'z', gate.qubits[0], '0', column)
-      const second = spider(gate, gate.name === 'cx' ? 'x' : 'z', gate.qubits[1], '0', column)
-      connect(first, second, gate.name === 'cz')
-    } else if (gate.name === 'swap') {
-      const first = spider(gate, 'x', gate.qubits[0], 'π', column)
-      const second = spider(gate, 'x', gate.qubits[1], 'π', column)
-      connect(first, second)
-    } else if (gate.name === 'ry') {
-      const wire = gate.qubits[0]
-      spider(gate, 'z', wire, '-π/2', column - 0.25, '-in')
-      spider(gate, 'x', wire, phaseFor(gate), column)
-      spider(gate, 'z', wire, 'π/2', column + 0.25, '-out')
-    } else if (gate.name === 'y') {
-      const wire = gate.qubits[0]
-      spider(gate, 'x', wire, 'π', column)
-      spider(gate, 'z', wire, 'π', column)
-    } else {
-      spider(gate, gate.name === 'x' || gate.name === 'rx' ? 'x' : 'z', gate.qubits[0], phaseFor(gate), column)
+  for (const gate of circuit.gates) {
+    const drawing = drawingOf(gate)
+    numbers.push(...drawing.numbers)
+    for (const step of drawing.steps) {
+      expand(gate, step)
+      column += 1
     }
-  })
+  }
 
   last.forEach((source, wire) => {
     const id = `out-${wire}`
@@ -106,12 +94,12 @@ export function translateCircuit(circuit: QuantumCircuit): ZXGraph3D {
       wire,
       label: '⟩',
       position: {
-        x: Math.max(circuit.gates.length, 1) * columnSpacing + 150,
+        x: Math.max(column, 1) * columnSpacing + 150,
         y: wireY(wire, circuit.qubits),
         z: 0,
       },
     })
     connect(source, id)
   })
-  return { nodes, edges }
+  return numbers.length ? { nodes, edges, numbers } : { nodes, edges }
 }
