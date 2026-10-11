@@ -22,6 +22,10 @@ interface Spider3DCanvasViewProps {
   canDelete: (id: string) => boolean
   describeNode: (node: ZXNode) => string
   onDropElement?: (elementId: PictureElementId, position: Vector3) => void
+  joinGuide?: string
+  joinNodeIds?: string[]
+  onJoinNode?: (id: string) => void
+  onCancelJoin?: () => void
   apiRef?: RefObject<SpiderCanvasApi | null>
   className?: string
 }
@@ -59,14 +63,14 @@ type Marquee = { x0: number; y0: number; x1: number; y1: number }
 const isEditable = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
 
-export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelectionChange, onMove, onConnect, onDelete, canDelete, describeNode, onDropElement, apiRef, className = '' }: Spider3DCanvasViewProps) {
+export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelectionChange, onMove, onConnect, onDelete, canDelete, describeNode, onDropElement, joinGuide = '', joinNodeIds = [], onJoinNode, onCancelJoin, apiRef, className = '' }: Spider3DCanvasViewProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const callbacks = useRef({ onSelectionChange, onMove, describeNode })
   const controls = useRef<{ zoom: (factor: number) => void; reset: () => void; pointAt: (clientX: number, clientY: number) => Vector3; center: () => Vector3 } | null>(null)
   const selectedRef = useRef(new Set(selectedIds))
   const savedView = useRef<{ projection: string; position: THREE.Vector3; target: THREE.Vector3; zoom: number } | null>(null)
   const [projection, setProjection] = useState<'3d' | '2d'>('2d')
-  const [bookTime, setBookTime] = useState(false)
+  const [bookTime, setBookTime] = useState(true)
   const [dropActive, setDropActive] = useState(false)
   const [boxMode, setBoxMode] = useState(false)
   const boxModeRef = useRef(false)
@@ -81,6 +85,10 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
   const hoverTip = useRef<HTMLDivElement>(null)
   const hoverRef = useRef<string | undefined>(undefined)
   const connecting = Boolean(connectionSource)
+  const joining = Boolean(joinGuide)
+  const joinIds = new Set(joinNodeIds)
+  const cancelJoin = useRef(onCancelJoin)
+  cancelJoin.current = onCancelJoin
 
   const flash = useCallback((message: string) => {
     window.clearTimeout(messageTimer.current)
@@ -94,6 +102,7 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
     setConnectionSource(id)
     callbacks.current.onSelectionChange([id])
     setConnectionMessage('Click another node to connect it. Use × to delete this node. Esc or an empty click cancels.')
+    cancelJoin.current?.()
   }, [])
   const cancelConnection = useCallback((message = '') => {
     connectionRef.current.source = undefined
@@ -154,6 +163,7 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
       if (event.target !== document.body && !(event.target instanceof Node && wrap?.contains(event.target))) return
       if (event.key === 'Escape') {
         if (connectionRef.current.source) { event.preventDefault(); cancelConnection('Connection cancelled.') }
+        else if (joinGuide) { event.preventDefault(); onCancelJoin?.() }
         else if (selectedRef.current.size) { event.preventDefault(); onSelectionChange([]) }
       } else if ((event.key === 'Delete' || event.key === 'Backspace') && selectedRef.current.size) {
         event.preventDefault()
@@ -704,24 +714,25 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
       className={`spider-3d-canvas ${dropActive ? 'drop-active' : ''} ${boxMode ? 'box-mode' : ''} ${hoverId && !connecting ? 'node-hover' : ''}`}
       aria-label={`Interactive ${projection} ZX spider graph`}
     />
-    <div className={`canvas-node-handles ${connecting ? 'connecting' : ''}`} aria-label="Canvas nodes">
+    <div className={`canvas-node-handles ${connecting ? 'connecting' : ''} ${joining ? 'joining' : ''}`} aria-label="Canvas nodes">
       {graph.nodes.map((node) => {
         const error = connectionSource && connectionSource !== node.id ? connectionError(graph, connectionSource, node.id) : undefined
+        const joinable = joining && joinIds.has(node.id)
         const selected = selectedIds.includes(node.id)
         return <button
           key={node.id}
           ref={(button) => { if (button) nodeHandles.current.set(node.id, button); else nodeHandles.current.delete(node.id) }}
           type="button"
-          className={`canvas-node-handle ${connectionSource === node.id ? 'source' : error ? 'invalid' : ''} ${selected ? 'selected' : ''}`}
+          className={`canvas-node-handle ${connectionSource === node.id ? 'source' : error ? 'invalid' : ''} ${joinable ? 'join' : ''} ${selected ? 'selected' : ''}`}
           data-node-id={node.id}
-          aria-label={connectionSource ? `${connectionSource === node.id ? 'Cancel connection from' : 'Connect to'} ${node.id}` : `Select ${node.id}`}
+          aria-label={connectionSource ? `${connectionSource === node.id ? 'Cancel connection from' : 'Connect to'} ${node.id}` : joinable ? `Join at ${node.id}` : `Select ${node.id}`}
           aria-pressed={connectionSource ? connectionSource === node.id : selected}
-          data-tip={`${describeNode(node)}${error ? `\n⚠ ${error}` : ''}`}
+          data-tip={`${describeNode(node)}${error ? `\n⚠ ${error}` : ''}${joinable ? '\nClick to place the symbol and connect it here.' : ''}`}
           onPointerEnter={() => { connectionRef.current.hover = node.id }}
           onPointerLeave={() => { connectionRef.current.hover = undefined }}
           onFocus={() => { connectionRef.current.hover = node.id }}
           onBlur={() => { connectionRef.current.hover = undefined }}
-          onClick={() => chooseConnectionNode(node.id)}
+          onClick={() => { if (joinable) { onJoinNode?.(node.id); return } chooseConnectionNode(node.id) }}
           onKeyDown={(event) => {
             if (event.key === 'c' && !connectionSource) { event.preventDefault(); startConnection(node.id) }
           }}
@@ -736,7 +747,7 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
     <div className="canvas-toolbar" data-tour="canvas-toolbar" aria-label="Graph canvas controls">
       <button type="button" aria-label="Select all nodes" data-tip={'Select all\nSelects every node so you can move or delete them together. Shortcut: Ctrl/⌘ + A.'} onClick={() => onSelectionChange(graph.nodes.map((node) => node.id))}>All</button>
       <button type="button" aria-label="Box select" aria-pressed={boxMode} data-tip={'Box select\nDrag a rectangle over empty canvas to select nodes. Ctrl/⌘ + drag also box-selects. Drag any selected node to move the group.'} onClick={() => setBoxMode((current) => !current)}>▭ Box</button>
-      {connecting && <button type="button" aria-label="Cancel connection" onClick={() => cancelConnection('Connection cancelled.')}>Cancel</button>}
+      {(connecting || joining) && <button type="button" aria-label={connecting ? 'Cancel connection' : 'Cancel join'} onClick={() => connecting ? cancelConnection('Connection cancelled.') : onCancelJoin?.()}>Cancel</button>}
       <span />
       <button type="button" aria-label="Zoom in" data-tip="Zoom in" onClick={() => controls.current?.zoom(1.2)}>+</button>
       <button type="button" aria-label="Zoom out" data-tip="Zoom out" onClick={() => controls.current?.zoom(1 / 1.2)}>−</button>
@@ -746,7 +757,7 @@ export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelec
         {projection === '3d' ? '2D' : '3D'}
       </button>
     </div>
-    {connectionMessage && <div className="canvas-connection-status" role="status">{connectionMessage}{connecting && <span>Palette wires are included in ZX JSON, not OpenQASM.</span>}</div>}
-    <div className="canvas-hint">{connecting ? 'CLICK A NODE TO CONNECT · × DELETES · ESC CANCELS' : `${boxMode ? 'DRAG TO BOX-SELECT' : projection === '3d' ? 'DRAG ORBIT · SHIFT/RIGHT-DRAG PAN' : 'DRAG PAN'} · ${bookTime ? 'TIME UP' : 'TIME TO THE RIGHT'} · DOUBLE-CLICK NODE TO CONNECT OR DELETE · DEL REMOVES SELECTION`}</div>
+    {(connectionMessage || joinGuide) && <div className="canvas-connection-status" role="status">{connectionMessage || joinGuide}{connecting && <span>Palette wires are included in ZX JSON, not OpenQASM.</span>}{!connectionMessage && joining && <span>{joinNodeIds.length ? `${joinNodeIds.length} highlighted ${joinNodeIds.length === 1 ? 'node accepts' : 'nodes accept'} this symbol.` : 'No node on this diagram accepts this symbol yet.'}</span>}</div>}
+    <div className="canvas-hint">{connecting ? 'CLICK A NODE TO CONNECT · × DELETES · ESC CANCELS' : joining ? 'CLICK A HIGHLIGHTED NODE TO PLACE AND CONNECT · ESC CANCELS' : `${boxMode ? 'DRAG TO BOX-SELECT' : projection === '3d' ? 'DRAG ORBIT · SHIFT/RIGHT-DRAG PAN' : 'DRAG PAN'} · ${bookTime ? 'TIME UP' : 'TIME TO THE RIGHT'} · DOUBLE-CLICK NODE TO CONNECT OR DELETE · DEL REMOVES SELECTION`}</div>
   </div>
 }

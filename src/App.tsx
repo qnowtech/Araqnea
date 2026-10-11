@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CircuitPreset } from './data/circuitLibraryPresets'
 import { gateInfo, spiderKindInfo } from './data/gateInfo'
 import { GuidedTour } from './components/GuidedTour'
 import { HoverTooltip } from './components/HoverTooltip'
@@ -11,7 +10,7 @@ import { CodeView } from './components/views/CodeView'
 import { GateCircuitView } from './components/views/GateCircuitView'
 import { Spider3DCanvasView, type SpiderCanvasApi } from './components/views/Spider3DCanvasView'
 import { SpiderPalette } from './components/views/SpiderPalette'
-import { CityPlot, Histogram } from './components/views/RunCharts'
+import { RunReport } from './components/views/RunCharts'
 import { toPennyLane, toQasm, toQasm3, toQiskitPython, toZXJson } from './lib/exporters/circuitExporters'
 import { toQollabCss, toQollabHtml, toQollabJs } from './lib/exporters/qollabExporter'
 import { parseQasm } from './lib/parsers/qasm2Parser'
@@ -23,7 +22,7 @@ import { flipPhase, parsePhase, phaseLabel } from './lib/zx-core/semantics'
 import { denote } from './lib/zx-core/validate'
 import { buildPictureElement, pictureElements, type PictureElementId } from './lib/zx-core/pictureElements'
 import { columnSpacing, translateCircuit } from './lib/zx-core/translator'
-import { connectionError } from './lib/zx-core/connections'
+import { connectionError, joinGuide, joinSiteLabel, joinSites } from './lib/zx-core/connections'
 import type { GateName, QuantumCircuit } from './types/circuit'
 import type { Vector3, ZXGraph3D, ZXNode } from './types/zx'
 
@@ -64,6 +63,7 @@ function App() {
   const [mode, setMode] = useState<WorkbenchMode>('spiders')
   const [presetRevision, setPresetRevision] = useState(0)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [joinElement, setJoinElement] = useState<PictureElementId | null>(null)
   const [showExport, setShowExport] = useState(false)
   const [exportFormat, setExportFormat] = useState<ExportFormat>('qasm2')
   const [exportFileIndex, setExportFileIndex] = useState(0)
@@ -117,6 +117,16 @@ function App() {
   const addedElementCount = new Set(added.nodes.map((node) => node.id.split('-')[0])).size
   const diagramFormula = useMemo(() => graph.nodes.length ? explain(graph) : undefined, [graph])
   const denotation = useMemo(() => graph.nodes.length ? denote(graph) : undefined, [graph])
+  const joinPlan = useMemo(() => {
+    if (!joinElement) return undefined
+    const sites = joinSites(graph, joinElement)
+    const names = [...new Set(sites.map((site) => {
+      const node = graph.nodes.find((item) => item.id === site.nodeId)
+      return node ? joinSiteLabel(node) : site.nodeId
+    }))]
+    const where = names.length ? ` Highlighted: ${names.slice(0, 8).join(', ')}${names.length > 8 ? `, +${names.length - 8} more` : ''}.` : ''
+    return { sites, text: `${joinGuide(joinElement)}${where}` }
+  }, [graph, joinElement])
   const nodeFormula = useMemo(() => selectedNode ? explain(graph, selectedNode.id) : undefined, [graph, selectedNode])
   const diagramKey = useMemo(() => JSON.stringify({
     nodes: graph.nodes.map((node) => [node.id, node.kind, node.phase, node.label, node.wire]),
@@ -132,16 +142,29 @@ function App() {
     })
     setSelectedIds([])
   }
-  const loadPreset = (preset: CircuitPreset) => {
-    updateActive(() => ({ title: preset.label, source: preset.qasm, positions: {}, added: { nodes: [], edges: [] } }))
-    setSelectedIds([])
-  }
   const execute = (mode: 'simulator' | 'hardware') => {
     if (!result.circuit) return
     setRanFor(diagramKey)
     setExecution(run({ mode, graph, circuit: result.circuit, token: token || undefined }))
   }
   const updateCircuit = (circuit: QuantumCircuit) => updateSource(toQasm(circuit))
+  const changeRegisters = (qubitsDelta: number, classicalDelta: number) => {
+    updateActive((circuit) => {
+      const parsed = parseQasm(circuit.source)
+      if (!parsed.circuit) return {}
+      const ids = new Set(circuit.added.nodes.map((node) => node.id))
+      return {
+        source: toQasm({
+          ...parsed.circuit,
+          qubits: Math.max(1, parsed.circuit.qubits + qubitsDelta),
+          classicalBits: Math.max(0, parsed.circuit.classicalBits + classicalDelta),
+        }),
+        positions: {},
+        added: { ...circuit.added, edges: circuit.added.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)) },
+      }
+    })
+    setSelectedIds([])
+  }
   const addGate = (name: GateName, wire: number) => {
     if (!result.circuit) return
     const multiQubit = name === 'cx' || name === 'cz' || name === 'swap'
@@ -186,6 +209,7 @@ function App() {
     return true
   }
   const addPictureElement = (elementId: PictureElementId, at?: Vector3) => {
+    setJoinElement(null)
     addedCounter.current += 1
     const index = addedCounter.current
     const centre = canvasApi.current?.centerPoint() ?? { x: 0, y: 0, z: 0 }
@@ -200,6 +224,38 @@ function App() {
     updateActive((current) => ({ added: { nodes: [...current.added.nodes, ...element.nodes], edges: [...current.added.edges, ...element.edges] } }))
     const focus = element.nodes.find((node) => node.kind !== 'boundary') ?? element.nodes[0]
     setSelectedIds([focus.id])
+  }
+  const joinPictureElement = (nodeId: string) => {
+    if (!joinElement || !joinPlan) return
+    const site = joinPlan.sites.find((item) => item.nodeId === nodeId)
+    const target = graph.nodes.find((node) => node.id === nodeId)
+    if (!site || !target) return
+    addedCounter.current += 1
+    const index = addedCounter.current
+    const prefix = `pic${Date.now().toString(36)}${index}-${joinElement}`
+    const probe = buildPictureElement(joinElement, { x: 0, y: 0, z: 0 }, 'probe')
+    const probePort = probe.nodes.find((node) => node.id === `probe-${site.port}`)
+    if (!probePort) return
+    const gap = probePort.label === 'in' ? 160 : -160
+    const element = buildPictureElement(joinElement, {
+      x: target.position.x + gap - probePort.position.x,
+      y: target.position.y - probePort.position.y,
+      z: target.position.z,
+    }, prefix)
+    const port = element.nodes.find((node) => node.id === `${prefix}-${site.port}`)
+    if (!port) return
+    const edge = { id: `pic-edge-${Date.now()}-${index}`, source: port.id, target: nodeId, custom: true as const }
+    updateActive((current) => ({
+      added: {
+        nodes: [...current.added.nodes, ...element.nodes],
+        edges: [...current.added.edges, ...element.edges, edge],
+      },
+    }))
+    const focus = element.nodes.find((node) => node.kind !== 'boundary') ?? port
+    setSelectedIds([focus.id])
+    setJoinElement(null)
+    const label = pictureElements.find((item) => item.id === joinElement)?.label ?? joinElement
+    announce(`Joined ${label} at ${joinSiteLabel(target)}.`)
   }
   const canDelete = useCallback((id: string) => {
     const node = graph.nodes.find((item) => item.id === id)
@@ -376,9 +432,6 @@ function App() {
     announce(`Deleted “${title}”.`)
   }
 
-  const statevector = shownRun?.ok && shownRun.mode === 'simulator' && shownRun.method === 'statevector' ? shownRun : undefined
-  const counts = shownRun?.ok && 'counts' in shownRun ? shownRun.counts : undefined
-
   return (
     <main className="app-shell">
       <HoverTooltip />
@@ -438,12 +491,12 @@ function App() {
             : mode === 'code'
               ? <CodeView source={source} error={result.error} qubits={result.circuit?.qubits ?? 0} onChange={updateSource} />
               : mode === 'gates'
-                ? <GateCircuitView key={`${active.id}-${presetRevision}`} circuit={result.circuit!} onAdd={addGate} onRemove={removeGate} onPhase={updateGatePhase} />
+                ? <GateCircuitView key={`${active.id}-${presetRevision}`} circuit={result.circuit!} onAdd={addGate} onAddQubit={() => changeRegisters(1, 0)} onAddClassical={() => changeRegisters(0, 1)} onRemove={removeGate} onPhase={updateGatePhase} />
                 : <section className="mode-content active-spider-view">
-                    <div className="view-title"><div><span className="eyebrow">MODE 03 · ZX GRAPH</span><h2>Spatial spider canvas</h2></div><span>Drop on a wire to add a gate · double-click a node to connect or delete · box-select to move groups</span></div>
+                    <div className="view-title"><div><span className="eyebrow">MODE 03 · ZX GRAPH</span><h2>Spatial spider canvas</h2></div><span>Double-click a palette symbol to mark where it joins · click a marked node to connect</span></div>
                     <div className="spider-stage">
-                      <SpiderPalette onAdd={(id) => addPictureElement(id)} onPreset={loadPreset} onClear={() => { updateActive(() => ({ added: { nodes: [], edges: [] } })); setSelectedIds((ids) => ids.filter((id) => !added.nodes.some((node) => node.id === id))) }} addedCount={addedElementCount} />
-                      <Spider3DCanvasView cameraKey={`${active.id}-${presetRevision}`} graph={graph} selectedIds={selectedIds} onSelectionChange={setSelectedIds} onMove={moveNodes} onConnect={connectNodes} onDelete={deleteNodes} canDelete={canDelete} describeNode={describeNode} onDropElement={addPictureElement} apiRef={canvasApi} />
+                      <SpiderPalette onAdd={(id) => addPictureElement(id)} onJoin={(id) => setJoinElement((current) => current === id ? null : id)} joinId={joinElement} onCancelJoin={() => setJoinElement(null)} onClear={() => { setJoinElement(null); updateActive(() => ({ added: { nodes: [], edges: [] } })); setSelectedIds((ids) => ids.filter((id) => !added.nodes.some((node) => node.id === id))) }} addedCount={addedElementCount} />
+                      <Spider3DCanvasView cameraKey={`${active.id}-${presetRevision}`} graph={graph} selectedIds={selectedIds} onSelectionChange={setSelectedIds} onMove={moveNodes} onConnect={connectNodes} onDelete={deleteNodes} canDelete={canDelete} describeNode={describeNode} onDropElement={addPictureElement} joinGuide={joinPlan?.text} joinNodeIds={joinPlan?.sites.map((site) => site.nodeId)} onJoinNode={joinPictureElement} onCancelJoin={() => setJoinElement(null)} apiRef={canvasApi} />
                     </div>
                     <div className="graph-legend" data-tour="legend">
                       <span data-tip={spiderKindInfo.z} tabIndex={0}><i className="z-dot" /><i className="z-white" /> Z</span>
@@ -490,29 +543,29 @@ function App() {
         </section>
       </section>
       <section className="results" data-tour="overview">
-        <div className="overview-copy">
-          <span className="eyebrow">CIRCUIT OVERVIEW</span>
-          <h2>{title || defaultTitle}</h2>
-          {diagramFormula && <p className="formula"><code>{diagramFormula.latex}</code></p>}
-        </div>
-        <div className="result-stats">
-          <span><b>{result.circuit?.qubits ?? 0}</b> QUBITS</span>
-          <span><b>{result.circuit?.gates.length ?? 0}</b> GATES</span>
-          <span><b>{graph.edges.length}</b> WIRES</span>
-          <span><b>{library.circuits.length}</b> SAVED CIRCUITS</span>
+        <div className="results-head">
+          <div className="overview-copy">
+            <span className="eyebrow">CIRCUIT OVERVIEW</span>
+            <h2>{title || defaultTitle}</h2>
+            {diagramFormula && <p className="formula"><code>{diagramFormula.latex}</code></p>}
+          </div>
+          <div className="result-stats">
+            <span><b>{result.circuit?.qubits ?? 0}</b> QUBITS</span>
+            <span><b>{result.circuit?.gates.length ?? 0}</b> GATES</span>
+            <span><b>{graph.edges.length}</b> WIRES</span>
+            <span><b>{library.circuits.length}</b> SAVED</span>
+          </div>
         </div>
         <div className="run-panel">
+          <button type="button" onClick={() => execute('simulator')} disabled={!result.circuit}>Simulator</button>
+          <button type="button" onClick={() => execute('hardware')} disabled={!result.circuit}>Hardware</button>
           <label className="key-field">Key
             <input type="password" autoComplete="off" aria-label="Hardware key" value={token} onChange={(event) => setToken(event.target.value)} />
           </label>
-          <button type="button" onClick={() => execute('simulator')} disabled={!result.circuit}>Simulator</button>
-          <button type="button" onClick={() => execute('hardware')} disabled={!result.circuit}>Hardware</button>
-          {shownRun && !shownRun.ok && <p className="run-error">{shownRun.error}</p>}
-          {statevector && <div className="run-chart"><span>Amplitudes</span><CityPlot amplitudes={statevector.amplitudes} /></div>}
-          {counts && <div className="run-chart"><span>Counts</span><Histogram counts={counts} /></div>}
-          {shownRun?.ok && shownRun.mode === 'hardware' && <p className="run-note">Hardware returns counts only.</p>}
-          {shownRun && <pre className="run-json" aria-label="Run result">{JSON.stringify(shownRun)}</pre>}
+          {!shownRun && <p className="run-note">Run the simulator or the hardware to see probabilities and counts.</p>}
         </div>
+        {shownRun && <RunReport result={shownRun} />}
+        {shownRun && <details className="run-json"><summary>Result JSON</summary><pre aria-label="Run result">{JSON.stringify(shownRun, null, 2)}</pre></details>}
       </section>
       <footer>Araqnea <span>·</span> ZX-calculus workbench <span>·</span> Built for quantum engineering</footer>
       {notice && <div className="toast" role="status">{notice}</div>}
@@ -548,10 +601,10 @@ function App() {
           <p>Formally, a Z spider with n inputs, m outputs and phase α represents |0⟩<sup>⊗m</sup>⟨0|<sup>⊗n</sup> + e<sup>iα</sup>|1⟩<sup>⊗m</sup>⟨1|<sup>⊗n</sup>. An X spider uses |+⟩ and |−⟩ instead.</p>
           <p>Araqnea lets you design quantum circuits three ways — OpenQASM 2.0 code, a gate circuit editor, and an interactive ZX-calculus spider canvas in 2D or 3D — all kept in live sync. A ZX-calculus quantum workbench.</p>
           <ul>
-            <li><b>Presets</b> — Bell, GHZ and Hadamard test circuits; Qiskit RealAmplitudes and EfficientSU2 ansatz; PennyLane AngleEmbedding, BasicEntanglerLayers and StronglyEntanglingLayers, decomposed with editable example angles. The spider palette also loads the Qiskit circuit library.</li>
+            <li><b>Presets</b> — one selector above the modes: Bell, GHZ, Hadamard test, Qiskit ansatz, PennyLane templates, and the circuit library.</li>
             <li><b>Code</b> — write OpenQASM 2.0 with instant parsing; export Python for Qiskit or PennyLane.</li>
-            <li><b>Circuit gates</b> — add and remove gates, and edit rotation or phase angles in degrees or radians with Enter or Apply.</li>
-            <li><b>Spiders</b> — explore the ZX graph, drag picturalism elements in, box-select and move groups, double-click to connect or delete, and edit phases. The canvas opens flat.</li>
+            <li><b>Circuit gates</b> — add qubits and classical bits, add and remove gates, and edit rotation or phase angles in degrees or radians with Enter or Apply.</li>
+            <li><b>Spiders</b> — explore the ZX graph, drag picturalism elements in, double-click a symbol to see where it can join, box-select and move groups, and edit phases. The canvas opens flat.</li>
             <li><b>Circuits</b> — rename, create and switch between circuits saved in your browser.</li>
             <li><b>Export</b> — OpenQASM 2.0/3.0, Qiskit, PennyLane, a Qollab project (index.html, style.css, main.js), or 3D ZX JSON.</li>
           </ul>

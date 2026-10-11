@@ -6,7 +6,7 @@ export const examples = {
 
 export interface CircuitPreset {
   name: string
-  group: 'Circuits' | 'Qiskit ansatz' | 'PennyLane templates'
+  group: string
   description: string
   source: string
 }
