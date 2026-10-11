@@ -95,6 +95,7 @@ function App() {
     return {
       nodes,
       edges: [...baseGraph.edges, ...added.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target))],
+      ...(baseGraph.numbers?.length ? { numbers: baseGraph.numbers } : {}),
     }
   }, [baseGraph, positions, added])
   const sync = useMemo(() => result.circuit ? validateSync(result.circuit, graph) : undefined, [result.circuit, graph])

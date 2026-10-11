@@ -2,6 +2,7 @@ import type { CircuitGate, GateName, QuantumCircuit } from '../../types/circuit'
 import type { ZXGraph3D, ZXNode } from '../../types/zx'
 import { toQasm } from '../exporters/circuitExporters'
 import { parseQasm } from '../parsers/qasm2Parser'
+import { gateFromSpider } from '../zx-core/semantics'
 import { columnSpacing, translateCircuit, wireSpacing, wireY } from '../zx-core/translator'
 
 export interface SyncCheck {
@@ -62,15 +63,7 @@ export const canInsertIntoCircuit = (node: ZXNode) => Boolean(node.custom && nod
 /** Maps a single palette generator to the equivalent circuit gate. */
 export function gateForSpider(node: ZXNode): { name: GateName; parameter?: string } | undefined {
   if (!canInsertIntoCircuit(node)) return undefined
-  if (node.kind === 'hadamard') return { name: 'h' }
-  const phase = (node.phase || '0').replaceAll('π', 'pi').replace(/\s+/g, '')
-  if (node.kind === 'z') {
-    if (phase === 'pi') return { name: 'z' }
-    if (phase === 'pi/2') return { name: 's' }
-    if (phase === 'pi/4') return { name: 't' }
-    return { name: 'rz', parameter: phase }
-  }
-  if (node.kind === 'x') return phase === 'pi' ? { name: 'x' } : { name: 'rx', parameter: phase }
+  return gateFromSpider(node.kind, node.phase)
 }
 
 /** Finds the qubit wire under a graph position, if the position lies on a wire's band. */

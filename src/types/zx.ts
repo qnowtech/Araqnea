@@ -6,6 +6,12 @@ export interface Vector3 {
   z: number
 }
 
+/** A complex number. The empty product — a diagram with no legs and no factors — is 1. */
+export interface DiagramScalar {
+  re: number
+  im: number
+}
+
 export interface ZXNode {
   id: string
   kind: SpiderKind
@@ -16,6 +22,8 @@ export interface ZXNode {
   position: Vector3
   custom?: boolean
   symbol?: string
+  /** Scalar carried by this node. Absent means 1. */
+  number?: DiagramScalar
 }
 
 export interface ZXEdge {
@@ -29,4 +37,6 @@ export interface ZXEdge {
 export interface ZXGraph3D {
   nodes: ZXNode[]
   edges: ZXEdge[]
+  /** Scalars with no legs. Absent means the empty diagram, whose number is 1. */
+  numbers?: DiagramScalar[]
 }
