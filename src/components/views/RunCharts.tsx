@@ -55,7 +55,7 @@ export function RunReport({ result }: { result: RunResult }) {
     return <div className="run-output">
       <article className="run-chart">
         <h3>Counts</h3>
-        <p>Hardware returns counts only. {shots} shots. Bar height is the share of shots.</p>
+        <p>{result.backendName ? <>Ran on <b>{result.backendName}</b>. </> : null}Hardware returns counts only. {shots} shots. Bar height is the share of shots.</p>
         <Counts entries={result.counts} />
       </article>
       <article className="run-chart">
