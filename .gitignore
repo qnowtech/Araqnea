@@ -29,3 +29,9 @@ dist-ssr
 
 
 .cursor/
+
+# Commit workflow local artifacts (never commit)
+cambios.md
+commit_message.txt
+commit_file.txt
+commit-message.txt

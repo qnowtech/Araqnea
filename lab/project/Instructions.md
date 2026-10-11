@@ -4,7 +4,7 @@ Araqnea guarda un circuito como OpenQASM 2.0 y deriva de él las compuertas y el
 
 El texto del circuito no cambia al reescribir. `validateSync` sigue comprobando texto, compuertas y arañas derivadas. El diagrama de trabajo es otra copia. `synthesize` vuelve a compuertas solo cuando esa copia tiene una lista única en el diccionario.
 
-Orden de la lógica: BL-0, BL-1, BL-4, BL-3, BL-2. Las casillas son el 10/10. La interfaz queda al final y no redefine ninguna de esas casillas.
+Orden de la lógica: BL-0, BL-1, BL-4, BL-3, BL-2. Las casillas son el 10/10. La interfaz queda al final y no redefine ninguna de esas casillas. El rediseño de la vista de arañas es UI-1 y UI-2.
 
 ---
 
@@ -87,7 +87,7 @@ Cómo validar
 
 `src/lib/zx-core/rewrite.ts`. `apply` cita una regla y devuelve otro diagrama, con su número sin patas. La solidez es que mapa y número coinciden. La completitud que el libro cierra con el corte de patas, el estallido y la última regla vale para fases múltiplo de \(\pi/2\) y para Clifford+\(T\).
 
-No son reglas, y no se implementan: el tirón, la fusión de tazas, el teléfono, el gadget de fase, pivot, complementación local, *full reduce* y la cirugía de celosía. El tirón y el teléfono salen de las reglas de abajo. El gadget de fase es una araña de BL-0 colgando de un hilo.
+No son reglas, y no se implementan: el tirón, la fusión de tazas, el teléfono, el gadget de fase, pivot, complementación local, _full reduce_ y la cirugía de celosía. El tirón y el teléfono salen de las reglas de abajo. El gadget de fase es una araña de BL-0 colgando de un hilo.
 
 ### 10/10
 
@@ -223,3 +223,41 @@ Cómo validar
 - [x] El texto del inspector y el del resumen son el `latex` de `explain`.
 - [ ] La clave escrita en pantalla no aparece en el OpenQASM exportado ni en el JSON del resultado.
 - [ ] Un diagrama con tapa no dibuja amplitudes ni cuentas.
+
+## Panel derecho: el estado al elegir
+
+A la derecha del lienzo, un panel muestra el estado del elemento en el que se hace clic, como el panel de propiedades de Figma. El texto es el que `explain` ya escribe. Sin elección, el panel no inventa un nodo. Con varios, muestra el grupo. Conectar, agregar al circuito y borrar siguen ahí y llaman a lo mismo.
+
+### 10/10
+
+Requisitos
+
+- [x] Elegir un nodo abre su estado en el panel derecho, al lado del lienzo.
+- [x] Ese estado es `explain(grafo, id)`, más la fase, el hilo o el símbolo de paleta, la posición y las aristas. Grados o \(\pi\) editan la misma fase guardada.
+- [x] Sin nodo elegido, el panel derecho no escribe fórmula. El resumen de abajo sigue escribiendo `explain(grafo)`.
+- [x] Con varios nodos, el panel dice cuántos hay y deja mover el grupo y borrar los que se pueden borrar.
+
+Qué esperar
+
+- [x] Clic en la caja de Hadamard muestra su generador en el panel derecho.
+- [x] Clic en el lienzo vacío deja el panel sin nodo.
+- [x] La fórmula del Bell del circuito, sin nodo elegido, sigue en el resumen.
+
+Cómo validar
+
+- [x] El texto del panel derecho es el `latex` de `explain` del nodo elegido.
+- [x] Elegir un nodo no cambia el mapa ni el OpenQASM.
+
+---
+
+## Backlog de UI (pendiente)
+
+- [ ] Añadir logo de Qnow.
+- [ ] Permitir Ctrl+Z (deshacer) en el canvas.
+- [ ] Cambiar el cursor a manito al arrastrar para mover el lienzo.
+- [ ] Solo debería poder moverse con la rueda central o con la manito.
+- [ ] Capacidad para desconectar y reconectar cúbits.
+- [ ] Limpiar / clearer el botón de elementos.
+- [ ] Arreglar la fórmula `(|000\rangle+|111\rangle)/\sqrt{2}`.
+- [ ] Consistencia en los botones de riesgo (componente específico).
+- [ ] Revisar si Load preset podría borrar cambios previos guardados en Saved: ¿cuándo se hace el saved?
