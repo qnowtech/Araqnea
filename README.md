@@ -71,4 +71,6 @@ npm run verify:qollab    # Playwright parity check of the package vs npm run dev
 
 Araqnea is named after Arachne, the weaver of Greek mythology transformed into a spider after challenging Athena. The workbench's formal Z/X spider language comes from ZX-calculus and is inspired by *Quantum in Pictures* by Bob Coecke and Stefano Gogioso, alongside Coecke and Kissinger's *Picturing Quantum Processes*.
 
-This effort is supported by Qollab & IonQ.
+This effort is supported by Qollab, IonQ and Qnow's Team.
+
+For all the Quantum Neas out there.
