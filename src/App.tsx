@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { gateInfo, spiderKindInfo } from './data/gateInfo'
 import { GuidedTour } from './components/GuidedTour'
 import { HoverTooltip } from './components/HoverTooltip'
+import { CircuitPresets } from './components/CircuitPresets'
+import { PhaseEditor } from './components/PhaseEditor'
+import { editableGateAngle, parameterizedGates } from './lib/angles'
 import { tourSteps } from './data/tourSteps'
 import { CodeView } from './components/views/CodeView'
 import { GateCircuitView } from './components/views/GateCircuitView'
@@ -25,7 +28,7 @@ interface ExportFile { name: string; text: string; type: string }
 const modeLabels: { id: WorkbenchMode; label: string; icon: string; tip: string }[] = [
   { id: 'code', label: 'Code', icon: '⌘', tip: 'Code\nWrite or paste OpenQASM 2.0. Every edit updates the gates and spiders.' },
   { id: 'gates', label: 'Circuit gates', icon: '▦', tip: 'Circuit gates\nBuild the circuit by clicking or dragging gates onto qubit wires.' },
-  { id: 'spiders', label: '3D spiders', icon: '◉', tip: '3D spiders\nExplore and edit the ZX-calculus diagram of the same circuit.' },
+  { id: 'spiders', label: 'Spiders', icon: '◉', tip: 'Spiders\nExplore and edit the ZX-calculus diagram of the same circuit in 2D or 3D.' },
 ]
 
 const exportFormats: { id: ExportFormat; label: string; detail: string }[] = [
@@ -53,9 +56,8 @@ const tourCompleted = () => {
 function App() {
   const [library, setLibrary] = useState(loadLibrary)
   const [mode, setMode] = useState<WorkbenchMode>('spiders')
+  const [presetRevision, setPresetRevision] = useState(0)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
-  const [phaseEdit, setPhaseEdit] = useState<{ nodeId?: string; value: string }>({ value: '' })
-  const [phaseError, setPhaseError] = useState('')
   const [showExport, setShowExport] = useState(false)
   const [exportFormat, setExportFormat] = useState<ExportFormat>('qasm2')
   const [exportFileIndex, setExportFileIndex] = useState(0)
@@ -100,9 +102,12 @@ function App() {
   const sync = useMemo(() => result.circuit ? validateSync(result.circuit, graph) : undefined, [result.circuit, graph])
   const selectedId = selectedIds.at(-1)
   const selectedNode = selectedIds.length === 1 ? graph.nodes.find((node) => node.id === selectedId) : undefined
+  const selectedGate = result.circuit?.gates.find((gate) => gate.id === selectedNode?.gateId)
+  const selectedAngle = selectedGate && editableGateAngle(selectedGate)
+  const canEditPhase = selectedNode && (selectedNode.kind === 'x' || selectedNode.kind === 'z')
+    && (selectedNode.custom || (selectedAngle && (selectedGate?.name !== 'ry' || selectedNode.kind === 'x')))
   const addedElementCount = new Set(added.nodes.map((node) => node.id.split('-')[0])).size
 
-  const phaseValue = phaseEdit.nodeId === selectedId ? phaseEdit.value : selectedNode?.phase ?? ''
   const updateSource = (value: string) => {
     updateActive((circuit) => {
       const ids = new Set(circuit.added.nodes.map((node) => node.id))
@@ -123,7 +128,7 @@ function App() {
       id: `new-${Date.now()}-${result.circuit.gates.length}`,
       name,
       qubits: gateQubits,
-      ...(['rx', 'rz'].includes(name) ? { parameter: 'pi/2' } : {}),
+      ...(parameterizedGates.has(name) ? { parameter: 'pi/2' } : {}),
       ...(name === 'measure' ? { classicalBit: targetWire } : {}),
     }
     updateCircuit({
@@ -169,7 +174,6 @@ function App() {
     updateActive((current) => ({ added: { nodes: [...current.added.nodes, ...element.nodes], edges: [...current.added.edges, ...element.edges] } }))
     const focus = element.nodes.find((node) => node.kind !== 'boundary') ?? element.nodes[0]
     setSelectedIds([focus.id])
-    setPhaseError('')
   }
   const canDelete = useCallback((id: string) => {
     const node = graph.nodes.find((item) => item.id === id)
@@ -200,32 +204,40 @@ function App() {
       added: { ...circuit.added, edges: [...circuit.added.edges, { id: `pic-edge-${Date.now()}-${circuit.added.edges.length}`, source: sourceId, target, custom: true }] },
     }))
   }
-  const updatePhase = () => {
-    if (!selectedNode) return
-    if (selectedNode.custom) {
-      const phase = phaseValue.replaceAll('pi', 'π').trim() || '0'
-      updateActive((circuit) => ({ added: { ...circuit.added, nodes: circuit.added.nodes.map((node) => node.id === selectedNode.id ? { ...node, phase } : node) } }))
-      setPhaseEdit({ nodeId: selectedNode.id, value: phase })
-      setPhaseError('')
-      return
-    }
-    if (!result.circuit || !selectedNode.gateId || (selectedNode.kind !== 'z' && selectedNode.kind !== 'x')) return
-    const normalizedPhase = phaseValue.replaceAll('π', 'pi').trim()
-    const name: GateName = selectedNode.kind === 'z' ? 'rz' : 'rx'
-    const gates = result.circuit.gates.map((gate) => gate.id === selectedNode.gateId
-      ? { ...gate, name, parameter: normalizedPhase } : gate)
+  const updateGatePhase = (gateId: string, parameter: string): string | undefined => {
+    const gate = result.circuit?.gates.find((item) => item.id === gateId)
+    const angle = gate && editableGateAngle(gate)
+    if (!result.circuit || !angle) return 'This gate does not have an editable angle.'
+    const gates = result.circuit.gates.map((item) => item.id === gateId
+      ? { ...item, name: angle.name, parameter } : item)
     const nextSource = toQasm({ ...result.circuit, gates })
     const nextResult = parseQasm(nextSource)
-    if (!nextResult.circuit) {
-      setPhaseError(nextResult.error ?? 'Invalid phase.')
+    if (!nextResult.circuit) return nextResult.error ?? 'Invalid phase.'
+    const nextGraph = translateCircuit(nextResult.circuit)
+    updateActive((circuit) => {
+      const ids = new Set([...nextGraph.nodes, ...circuit.added.nodes].map((node) => node.id))
+      return {
+        source: nextSource,
+        positions: Object.fromEntries(Object.entries(circuit.positions).filter(([id]) => ids.has(id))),
+        added: { ...circuit.added, edges: circuit.added.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)) },
+      }
+    })
+    if (selectedNode?.gateId === gateId) {
+      const kind = angle.name === 'rx' || angle.name === 'ry' ? 'x' : 'z'
+      setSelectedIds([`${gateId}-q${gate!.qubits[0]}-${kind}`])
+    }
+    announce(`Angle applied as ${angle.name === 'p' ? 'Ph' : angle.name}(${parameter}) rad — code, gates and spiders updated.`)
+  }
+  const updatePhase = (parameter: string): string | undefined => {
+    if (!selectedNode || !canEditPhase) return 'Select an editable phase spider.'
+    if (selectedNode.custom) {
+      const phase = parameter.replaceAll('pi', 'π')
+      updateActive((circuit) => ({ added: { ...circuit.added, nodes: circuit.added.nodes.map((node) => node.id === selectedNode.id ? { ...node, phase } : node) } }))
+      announce('Diagram phase updated. Use Add to circuit to apply this palette spider as a gate.')
       return
     }
-    updateSource(nextSource)
-    const nextId = `${selectedNode.gateId}-q${selectedNode.wire}-${selectedNode.kind}`
-    setSelectedIds([nextId])
-    setPhaseEdit({ nodeId: nextId, value: normalizedPhase })
-    setPhaseError('')
-    announce(`Phase applied as ${name}(${normalizedPhase}) — code and gates updated.`)
+    if (!selectedNode.gateId) return 'This node is not linked to a circuit gate.'
+    return updateGatePhase(selectedNode.gateId, parameter)
   }
   const moveNodes = useCallback((moves: Record<string, Vector3>) => {
     updateActive((circuit) => {
@@ -307,7 +319,6 @@ function App() {
   const switchCircuit = (id: string) => {
     setLibrary((current) => ({ ...current, activeId: id }))
     setSelectedIds([])
-    setPhaseError('')
   }
   const newCircuit = () => {
     setLibrary((current) => {
@@ -344,7 +355,7 @@ function App() {
     <main className="app-shell">
       <HoverTooltip />
       <header>
-        <a className="brand" data-tour="brand" href="/" aria-label="Araqnea home"><span className="brand-mark">⌬</span><span>Araqnea</span><small>QUANTUM WORKBENCH</small></a>
+        <a className="brand" data-tour="brand" href="/" aria-label="Araqnea home"><span className="brand-mark">⌬</span><span>Araqnea</span><small>Powered by Qnow</small></a>
         <nav data-tour="navbar">
           <span className="header-status"><i /> LIVE SYNC</span>
           <button type="button" onClick={startTour} data-tip={'Guided tour\nA short walkthrough of the workbench.'}>Tour <span aria-hidden="true">✦</span></button>
@@ -392,17 +403,23 @@ function App() {
               onClick={() => setMode(item.id)}
             ><span>{item.icon}</span>{item.label}</button>)}
           </div>
+          <CircuitPresets onLoad={(preset) => {
+            updateSource(preset.source)
+            updateActive(() => ({ title: preset.name }))
+            setPresetRevision((revision) => revision + 1)
+            announce(`Loaded ${preset.name} — code, gates and spiders updated.`)
+          }} />
           {!result.circuit && mode !== 'code'
             ? <div className="mode-content empty-state">Fix the OpenQASM syntax to edit this circuit. <button type="button" onClick={() => setMode('code')}>Open code</button></div>
             : mode === 'code'
-              ? <CodeView source={source} error={result.error} qubits={result.circuit?.qubits ?? 0} onChange={updateSource} onPreset={updateSource} />
+              ? <CodeView source={source} error={result.error} qubits={result.circuit?.qubits ?? 0} onChange={updateSource} />
               : mode === 'gates'
-                ? <GateCircuitView circuit={result.circuit!} onAdd={addGate} onRemove={removeGate} />
+                ? <GateCircuitView key={`${active.id}-${presetRevision}`} circuit={result.circuit!} onAdd={addGate} onRemove={removeGate} onPhase={updateGatePhase} />
                 : <section className="mode-content active-spider-view">
                     <div className="view-title"><div><span className="eyebrow">MODE 03 · ZX GRAPH</span><h2>Spatial spider canvas</h2></div><span>Drop on a wire to add a gate · double-click a node to connect or delete · box-select to move groups</span></div>
                     <div className="spider-stage">
                       <SpiderPalette onAdd={(id) => addPictureElement(id)} onClear={() => { updateActive(() => ({ added: { nodes: [], edges: [] } })); setSelectedIds((ids) => ids.filter((id) => !added.nodes.some((node) => node.id === id))) }} addedCount={addedElementCount} />
-                      <Spider3DCanvasView graph={graph} selectedIds={selectedIds} onSelectionChange={(ids) => { setSelectedIds(ids); setPhaseError('') }} onMove={moveNodes} onConnect={connectNodes} onDelete={deleteNodes} canDelete={canDelete} describeNode={describeNode} onDropElement={addPictureElement} apiRef={canvasApi} />
+                      <Spider3DCanvasView cameraKey={`${active.id}-${presetRevision}`} graph={graph} selectedIds={selectedIds} onSelectionChange={setSelectedIds} onMove={moveNodes} onConnect={connectNodes} onDelete={deleteNodes} canDelete={canDelete} describeNode={describeNode} onDropElement={addPictureElement} apiRef={canvasApi} />
                     </div>
                     <div className="graph-legend" data-tour="legend"><span data-tip={spiderKindInfo.z} tabIndex={0}><i className="z-dot" /> Z spider</span><span data-tip={spiderKindInfo.x} tabIndex={0}><i className="x-dot" /> X spider</span><span data-tip={spiderKindInfo.hadamard} tabIndex={0}><i className="h-dot" /> Hadamard</span><span>{graph.nodes.filter((node) => node.kind !== 'boundary').length} SPIDERS · {graph.edges.length} CONNECTIONS</span></div>
           <div className="inspector" data-tour="inspector">
@@ -419,11 +436,11 @@ function App() {
                 ? <div className="property-row"><span>Picturalism symbol</span><code>{pictureElements.find((element) => element.id === selectedNode.symbol)?.label ?? selectedNode.symbol}</code></div>
                 : <div className="property-row"><span>Qubit wire</span><code>q[{selectedNode.wire}]</code></div>}
               <div className="property-row"><span>3D position</span><code>{selectedNode.position.x.toFixed(1)}, {selectedNode.position.y.toFixed(1)}, {selectedNode.position.z.toFixed(1)}</code></div>
-              {selectedNode.kind === 'x' || selectedNode.kind === 'z' ? <div className="phase-editor">
-                <label htmlFor="phase-input">Phase</label><input id="phase-input" value={phaseValue} onChange={(event) => setPhaseEdit({ nodeId: selectedId, value: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') updatePhase() }} aria-invalid={Boolean(phaseError)} />
-                <button type="button" onClick={updatePhase}>Apply</button>
-                {phaseError && <span className="phase-error">{phaseError}</span>}
-              </div> : <div className="property-row"><span>Type</span><code>{selectedNode.label ?? selectedNode.kind}</code></div>}
+              {canEditPhase ? <PhaseEditor key={selectedNode.id} diagramOnly={Boolean(selectedNode.custom)} parameter={selectedNode.custom ? selectedNode.phase || '0' : selectedAngle!.parameter} target={selectedNode.custom
+                ? `${selectedNode.kind.toUpperCase()} palette spider only; Add to circuit applies it as a gate`
+                : `Applies to ${selectedAngle!.name === 'p' ? 'Ph' : selectedAngle!.name.toUpperCase()} on q[${selectedNode.wire}]${selectedGate!.name !== selectedAngle!.name ? ` (replaces fixed ${selectedGate!.name.toUpperCase()})` : ''}`} onApply={updatePhase} />
+                : <div className="property-row"><span>{selectedNode.kind === 'x' || selectedNode.kind === 'z' ? 'Fixed phase' : 'Type'}</span><code>{selectedNode.phase || selectedNode.label || selectedNode.kind}</code></div>}
+              {!canEditPhase && selectedGate && (selectedNode.kind === 'x' || selectedNode.kind === 'z') && <p className="editor-hint">{selectedGate.name === 'ry' ? 'Ry basis-change phases are fixed. Select the central X spider to edit the Ry angle.' : `This phase belongs to the ${selectedGate.name.toUpperCase()} decomposition and is not independently editable.`}</p>}
               <div className="property-row"><span>Connected edges</span><code>{graph.edges.filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id).length}</code></div>
               {added.edges.filter((edge) => edge.id.startsWith('pic-edge-') && (edge.source === selectedNode.id || edge.target === selectedNode.id)).map((edge) => <div className="property-row" key={edge.id}>
                 <code>{edge.source === selectedNode.id ? edge.target : edge.source}</code>
@@ -476,12 +493,16 @@ function App() {
       </div>}
       {showAbout && <div className="modal-backdrop" role="presentation" onClick={() => setShowAbout(false)}>
         <section className="modal about" role="dialog" aria-modal="true" aria-labelledby="about-title" onClick={(event) => event.stopPropagation()}>
-          <div className="modal-heading"><div><span className="eyebrow">ABOUT ARAQNEA</span><h2 id="about-title">A ZX-calculus quantum workbench</h2></div><button className="close" type="button" onClick={() => setShowAbout(false)} aria-label="Close about">×</button></div>
-          <p>Araqnea lets you design quantum circuits three ways — OpenQASM 2.0 code, a gate circuit editor, and an interactive 3D ZX-calculus spider canvas — all kept in live sync.</p>
+          <div className="modal-heading"><div><span className="eyebrow">ABOUT ARAQNEA</span><h2 id="about-title">Araqnea: weaving quantum diagrams</h2></div><button className="close" type="button" onClick={() => setShowAbout(false)} aria-label="Close about">×</button></div>
+          <p>Araqnea takes its name from Arachne, the gifted weaver of Greek mythology who challenged Athena to a weaving contest and was transformed into a spider. Her story inspires our canvas: quantum processes woven into a connected web of diagrams.</p>
+          <p>Our spiders are formal generators of ZX-calculus, not merely illustrations: green Z spiders and red X spiders represent maps in the computational and X bases, with phase angles controlling their relative phases. Their visual language is inspired by <i>Quantum in Pictures</i> by Bob Coecke and Stefano Gogioso. Circuit diagrams are represented up to global phase; palette-only diagrams are not automatically translated into circuits.</p>
+          <p>Formally, a Z spider with n inputs, m outputs and phase α represents |0⟩<sup>⊗m</sup>⟨0|<sup>⊗n</sup> + e<sup>iα</sup>|1⟩<sup>⊗m</sup>⟨1|<sup>⊗n</sup>. An X spider uses |+⟩ and |−⟩ instead.</p>
+          <p>Araqnea lets you design quantum circuits three ways — OpenQASM 2.0 code, a gate circuit editor, and an interactive ZX-calculus spider canvas in 2D or 3D — all kept in live sync. A ZX-calculus quantum workbench.</p>
           <ul>
-            <li><b>Code</b> — write or load OpenQASM 2.0 presets with instant parsing.</li>
-            <li><b>Circuit gates</b> — add and remove gates on qubit wires.</li>
-            <li><b>3D spiders</b> — explore the ZX graph spatially, drag picturalism elements in, box-select and move groups, double-click to connect or delete, and edit phases.</li>
+            <li><b>Presets</b> — Bell, GHZ and Hadamard test circuits; Qiskit RealAmplitudes and EfficientSU2 ansatz; PennyLane AngleEmbedding, BasicEntanglerLayers and StronglyEntanglingLayers, decomposed with editable example angles.</li>
+            <li><b>Code</b> — write OpenQASM 2.0 with instant parsing; export Python for Qiskit or PennyLane.</li>
+            <li><b>Circuit gates</b> — add and remove gates, and edit rotation or phase angles in degrees or radians with Enter or Apply.</li>
+            <li><b>Spiders</b> — explore the ZX graph spatially, drag picturalism elements in, box-select and move groups, double-click to connect or delete, and edit phases.</li>
             <li><b>Circuits</b> — rename, create and switch between circuits saved in your browser.</li>
             <li><b>Export</b> — OpenQASM 2.0/3.0, Qiskit, PennyLane, a Qollab project (index.html, style.css, main.js), or 3D ZX JSON.</li>
           </ul>
