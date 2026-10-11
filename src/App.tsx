@@ -12,7 +12,7 @@ import { Spider3DCanvasView, type SpiderCanvasApi } from './components/views/Spi
 import { SpiderPalette } from './components/views/SpiderPalette'
 import { RunReport } from './components/views/RunCharts'
 import { toPennyLane, toQasm, toQasm3, toQiskitPython, toZXJson } from './lib/exporters/circuitExporters'
-import { toQollabCss, toQollabHtml, toQollabJs } from './lib/exporters/qollabExporter'
+import { toQollabBundle } from './lib/exporters/qollabExporter'
 import { parseQasm } from './lib/parsers/qasm2Parser'
 import { createCircuit, defaultTitle, loadLibrary, saveLibrary, uniqueTitle, type SavedCircuit } from './lib/storage/circuitLibrary'
 import { canInsertIntoCircuit, insertSpiderGate, nearestWire, wireAt } from './lib/sync/circuitSync'
@@ -359,9 +359,7 @@ function App() {
     qiskit: [{ name: `${slug(title)}_qiskit.py`, text: toQiskitPython(result.circuit), type: 'text/x-python' }],
     pennylane: [{ name: `${slug(title)}_pennylane.py`, text: toPennyLane(result.circuit), type: 'text/x-python' }],
     qollab: [
-      { name: 'main.js', text: toQollabJs(result.circuit, graph, title), type: 'text/javascript' },
-      { name: 'index.html', text: toQollabHtml(title), type: 'text/html' },
-      { name: 'style.css', text: toQollabCss(), type: 'text/css' },
+      { name: 'index.html', text: toQollabBundle(result.circuit, graph, title), type: 'text/html' },
     ],
     zx: [{ name: `${slug(title)}.zx.json`, text: toZXJson(graph), type: 'application/json' }],
   })[exportFormat]

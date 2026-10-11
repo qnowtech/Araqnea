@@ -1,21 +1,30 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
-// Builds the entire app into exactly 3 files for platforms like Qollab:
-//   dist-qollab/index.html
-//   dist-qollab/main.js   (all JS, including React/three, in one chunk)
-//   dist-qollab/style.css (all CSS in one file)
-// Images/fonts are inlined as base64 data URIs; public/ files are not copied.
+// Builds the app as a runnable Qollab JS project per the runtime contract
+// (https://qollab.xyz/learn/docs/runtime-environment):
+//   dist-qollab/index.html  (body content ONLY — the runtime drops <html>,
+//                            <head>, <body> and does not run <script> tags)
+//   dist-qollab/main.js     (TOP-LEVEL; required — index.html + main.js at the
+//                            top level are what make a JS project runnable)
+//   dist-qollab/main.css    (TOP-LEVEL; the ONLY stylesheet Qollab loads)
+//
+// Code splitting is off and images/fonts are inlined as base64 data URIs,
+// keeping the file count at 3 (well under Qollab's 100-file limit);
+// the public/ directory is not copied.
 export default defineConfig({
   plugins: [
     react(),
     {
-      name: 'strip-crossorigin',
+      name: 'qollab-index-body-only',
       enforce: 'post',
-      // Platforms without CORS headers block <link>/<script> tags that carry
-      // the crossorigin attribute — stripping it makes style.css load.
+      // Reduce the built index.html to body content only:
+      //   - strip <script>/<link> tags (the runtime ignores/never loads them;
+      //     main.js and main.css are loaded automatically by name)
+      //   - strip the <html>/<head>/<body> wrappers the runtime would drop
       transformIndexHtml(html) {
-        return html.replace(/\s+crossorigin(="")?/g, '')
+        const mount = html.match(/<div id="root"><\/div>/)?.[0] ?? '<div id="root"></div>'
+        return `${mount}\n`
       },
     },
   ],
@@ -33,7 +42,7 @@ export default defineConfig({
         entryFileNames: 'main.js',
         assetFileNames: (assetInfo) => {
           const names = assetInfo.names ?? []
-          return names.some((n) => n.endsWith('.css')) ? 'style.css' : '[name][extname]'
+          return names.some((n) => n.endsWith('.css')) ? 'main.css' : '[name][extname]'
         },
       },
     },

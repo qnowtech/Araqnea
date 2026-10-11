@@ -162,8 +162,14 @@ ${operations}
 
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!)
 
-export function toQollabHtml(title = 'Araqnea circuit'): string {
+// Builds a single self-contained index.html for Qollab: CSS is inlined in a
+// <style> tag and the JS in an inline <script type="module">. Qollab serves the
+// page from its own origin root, so relative refs like ./style.css or ./main.js
+// would resolve to Qollab's own files and never load — everything must inline.
+export function toQollabHtml(title = 'Araqnea circuit', css?: string, js?: string): string {
   const safe = escapeHtml(title)
+  const styleBlock = css == null ? '    <link rel="stylesheet" href="./style.css" />' : `    <style>\n${css}\n    </style>`
+  const scriptBlock = js == null ? '    <script type="module" src="./main.js"></script>' : `    <script type="module">\n${js}\n    </script>`
   return [
     '<!doctype html>',
     '<html lang="en">',
@@ -171,7 +177,7 @@ export function toQollabHtml(title = 'Araqnea circuit'): string {
     '    <meta charset="utf-8" />',
     '    <meta name="viewport" content="width=device-width, initial-scale=1" />',
     `    <title>${safe}</title>`,
-    '    <link rel="stylesheet" href="./style.css" />',
+    styleBlock,
     '  </head>',
     '  <body>',
     '    <main>',
@@ -193,10 +199,16 @@ export function toQollabHtml(title = 'Araqnea circuit'): string {
     '        <pre id="results">Preparing…</pre>',
     '      </section>',
     '    </main>',
-    '    <script type="module" src="./main.js"></script>',
+    scriptBlock,
     '  </body>',
     '</html>',
   ].join('\n')
+}
+
+// The single-file Qollab project: index.html with CSS + JS inlined. This is the
+// only file the Export modal offers for the "qollab" format.
+export function toQollabBundle(circuit: QuantumCircuit, graph?: ZXGraph3D, title = 'Araqnea circuit'): string {
+  return toQollabHtml(title, toQollabCss(), toQollabJs(circuit, graph, title))
 }
 
 export function toQollabCss(): string {
