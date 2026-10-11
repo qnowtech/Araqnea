@@ -721,7 +721,7 @@ function App() {
         qollab: [
           {
             name: "main.js",
-            text: toQollabJs(result.circuit, title),
+            text: toQollabJs(result.circuit, graph, title),
             type: "text/javascript",
           },
           { name: "index.html", text: toQollabHtml(title), type: "text/html" },
