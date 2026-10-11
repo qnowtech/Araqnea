@@ -89,9 +89,14 @@ select, input { color: #dce5f1; background: #151e2e; border: 1px solid #334056; 
 .active-spider-view { display: flex; flex-direction: column; }
 .active-spider-view .spider-3d-canvas { height: clamp(435px, 60vh, 760px); }
 .spider-canvas-wrap { position: relative; width: 100%; min-width: 0; }
-.spider-3d-canvas { position: relative; width: 100%; height: 435px; overflow: hidden; border: 1px solid #29384d; border-radius: 9px; background: #08111d; touch-action: none; cursor: grab; }
-.spider-3d-canvas:active { cursor: grabbing; }
-.spider-3d-canvas canvas { display: block; width: 100%; height: 100%; }
+.spider-3d-canvas { position: relative; width: 100%; height: 435px; overflow: hidden; border: 1px solid #29384d; border-radius: 9px; background: #08111d; touch-action: none; cursor: default; }
+.spider-3d-canvas canvas { display: block; width: 100%; height: 100%; cursor: inherit; }
+.spider-3d-canvas.cursor-default { cursor: default; }
+.spider-3d-canvas.cursor-pointer { cursor: pointer; }
+.spider-3d-canvas.cursor-crosshair { cursor: crosshair; }
+.spider-3d-canvas.cursor-grab { cursor: grab; }
+.spider-3d-canvas.cursor-grabbing { cursor: grabbing; }
+.spider-3d-canvas.cursor-move { cursor: move; }
 .canvas-toolbar { position: absolute; z-index: 3; top: 10px; right: 10px; display: flex; gap: 4px; padding: 4px; border: 1px solid #415069a8; border-radius: 7px; background: #08111dd9; box-shadow: 0 3px 14px #0007; }
 .canvas-toolbar button { min-width: 27px; height: 26px; padding: 0 7px; border: 1px solid transparent; border-radius: 4px; color: #cad7e5; background: transparent; font: 12px var(--mono); }
 .canvas-toolbar button:hover, .canvas-toolbar button[aria-pressed="true"] { color: #83f0d7; background: #17322f; border-color: #2c6559; }
@@ -243,8 +248,6 @@ footer { padding: 15px 4vw; color: #67778d; font-size: 12px; display: flex; just
 .circuit-library button:disabled { opacity: .4; cursor: not-allowed; }
 .sync-status { margin-left: 6px; padding: 6px 9px; border: 1px solid #1f5a4d; border-radius: 6px; background: #0d2a26; font-size: 12px; cursor: help; }
 .sync-status.error { border-color: #6a3442; background: #2a1520; }
-.spider-3d-canvas.box-mode { cursor: crosshair; }
-.spider-3d-canvas.node-hover { cursor: pointer; }
 .canvas-node-handles { position: absolute; z-index: 1; inset: 0; pointer-events: none; overflow: hidden; border-radius: 9px; }
 .canvas-node-handle { position: absolute; width: 28px; height: 28px; padding: 0; transform: translate(-50%, -50%); border: 2px solid transparent; border-radius: 50%; background: transparent; pointer-events: none; }
 .canvas-node-handle:focus-visible { border-color: #83f0d7; box-shadow: 0 0 0 4px #83f0d733; outline: none; }
