@@ -2,7 +2,7 @@ import type { CircuitGate, QuantumCircuit } from '../../types/circuit'
 import type { ZXEdge, ZXGraph3D, ZXNode } from '../../types/zx'
 
 const phaseFor = (gate: CircuitGate) =>
-  ({ x: 'π', y: 'π', z: 'π', s: 'π/2', t: 'π/4', rx: gate.parameter ?? 'θ', rz: gate.parameter ?? 'θ' } as Partial<Record<CircuitGate['name'], string>>)[gate.name] ?? '0'
+  ({ x: 'π', y: 'π', z: 'π', s: 'π/2', t: 'π/4', rx: gate.parameter ?? 'θ', ry: gate.parameter ?? 'θ', rz: gate.parameter ?? 'θ', p: gate.parameter ?? 'θ' } as Partial<Record<CircuitGate['name'], string>>)[gate.name] ?? '0'
 
 export const columnSpacing = 135
 export const wireSpacing = 115
@@ -29,8 +29,8 @@ export function translateCircuit(circuit: QuantumCircuit): ZXGraph3D {
     nodes.push(node)
     return node.id
   }
-  const spider = (gate: CircuitGate, kind: 'z' | 'x', wire: number, phase: string, column: number) => {
-    const id = `${gate.id}-q${wire}-${kind}`
+  const spider = (gate: CircuitGate, kind: 'z' | 'x', wire: number, phase: string, column: number, suffix = '') => {
+    const id = `${gate.id}-q${wire}-${kind}${suffix}`
     const current = addNode({
       id,
       kind,
@@ -83,6 +83,11 @@ export function translateCircuit(circuit: QuantumCircuit): ZXGraph3D {
       const first = spider(gate, 'x', gate.qubits[0], 'π', column)
       const second = spider(gate, 'x', gate.qubits[1], 'π', column)
       connect(first, second)
+    } else if (gate.name === 'ry') {
+      const wire = gate.qubits[0]
+      spider(gate, 'z', wire, '-π/2', column - 0.25, '-in')
+      spider(gate, 'x', wire, phaseFor(gate), column)
+      spider(gate, 'z', wire, 'π/2', column + 0.25, '-out')
     } else if (gate.name === 'y') {
       const wire = gate.qubits[0]
       spider(gate, 'x', wire, 'π', column)

@@ -16,7 +16,7 @@ export function toQasm(circuit: QuantumCircuit): string {
     if (gate.name === 'measure') {
       lines.push(`measure q[${gate.qubits[0]}] -> c[${gate.classicalBit ?? gate.qubits[0]}];`)
     } else {
-      lines.push(formatGate(gate.name, gate.qubits, gate.parameter))
+      lines.push(formatGate(gate.name === 'p' ? 'u1' : gate.name, gate.qubits, gate.parameter))
     }
   }
   return lines.join('\n')
@@ -53,7 +53,9 @@ export function toQiskitPython(circuit: QuantumCircuit): string {
         lines.push(`qc.measure(${first}, ${gate.classicalBit ?? first})`)
         break
       case 'rx':
+      case 'ry':
       case 'rz':
+      case 'p':
         lines.push(`qc.${gate.name}(${gate.parameter}, ${first})`)
         break
       case 'cx':
@@ -69,7 +71,7 @@ export function toQiskitPython(circuit: QuantumCircuit): string {
 }
 
 const pennyLaneOps: Record<Exclude<GateName, 'measure'>, string> = {
-  h: 'Hadamard', x: 'PauliX', y: 'PauliY', z: 'PauliZ', s: 'S', t: 'T', rx: 'RX', rz: 'RZ', cx: 'CNOT', cz: 'CZ', swap: 'SWAP',
+  h: 'Hadamard', x: 'PauliX', y: 'PauliY', z: 'PauliZ', s: 'S', t: 'T', rx: 'RX', ry: 'RY', rz: 'RZ', p: 'PhaseShift', cx: 'CNOT', cz: 'CZ', swap: 'SWAP',
 }
 
 export function toPennyLane(circuit: QuantumCircuit): string {

@@ -68,7 +68,7 @@ export function gateForSpider(node: ZXNode): { name: GateName; parameter?: strin
     if (phase === 'pi') return { name: 'z' }
     if (phase === 'pi/2') return { name: 's' }
     if (phase === 'pi/4') return { name: 't' }
-    return { name: 'rz', parameter: phase }
+    return { name: 'p', parameter: phase }
   }
   if (node.kind === 'x') return phase === 'pi' ? { name: 'x' } : { name: 'rx', parameter: phase }
 }

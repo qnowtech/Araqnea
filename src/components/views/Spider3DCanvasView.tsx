@@ -11,6 +11,7 @@ export interface SpiderCanvasApi {
 }
 
 interface Spider3DCanvasViewProps {
+  cameraKey?: string
   graph: ZXGraph3D
   selectedIds: string[]
   onSelectionChange: (ids: string[]) => void
@@ -50,12 +51,12 @@ type Marquee = { x0: number; y0: number; x1: number; y1: number }
 const isEditable = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
 
-export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMove, onConnect, onDelete, canDelete, describeNode, onDropElement, apiRef, className = '' }: Spider3DCanvasViewProps) {
+export function Spider3DCanvasView({ cameraKey = '', graph, selectedIds, onSelectionChange, onMove, onConnect, onDelete, canDelete, describeNode, onDropElement, apiRef, className = '' }: Spider3DCanvasViewProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const callbacks = useRef({ onSelectionChange, onMove, describeNode })
   const controls = useRef<{ zoom: (factor: number) => void; reset: () => void; pointAt: (clientX: number, clientY: number) => Vector3; center: () => Vector3 } | null>(null)
   const selectedRef = useRef(new Set(selectedIds))
-  const savedView = useRef<{ projection: string; position: THREE.Vector3; target: THREE.Vector3; zoom: number } | null>(null)
+  const savedView = useRef<{ cameraKey: string; projection: string; position: THREE.Vector3; target: THREE.Vector3; zoom: number } | null>(null)
   const [projection, setProjection] = useState<'3d' | '2d'>('3d')
   const [dropActive, setDropActive] = useState(false)
   const [boxMode, setBoxMode] = useState(false)
@@ -194,7 +195,7 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
     navigation.minZoom = 0.2
     navigation.maxZoom = 8
     const previousView = savedView.current
-    if (previousView?.projection === projection) {
+    if (previousView?.projection === projection && previousView.cameraKey === cameraKey) {
       camera.position.copy(previousView.position)
       navigation.target.copy(previousView.target)
       camera.zoom = previousView.zoom
@@ -587,7 +588,7 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
     return () => {
       cancelAnimationFrame(frame)
       observer.disconnect()
-      savedView.current = { projection, position: camera.position.clone(), target: navigation.target.clone(), zoom: camera.zoom }
+      savedView.current = { cameraKey, projection, position: camera.position.clone(), target: navigation.target.clone(), zoom: camera.zoom }
       navigation.dispose()
       renderer.domElement.removeEventListener('pointerdown', down, { capture: true })
       renderer.domElement.removeEventListener('pointermove', move)
@@ -610,12 +611,13 @@ export function Spider3DCanvasView({ graph, selectedIds, onSelectionChange, onMo
           object.material.dispose()
         }
       })
+      renderer.forceContextLoss()
       renderer.dispose()
       previewGeometry.dispose()
       previewMaterial.dispose()
       host.removeChild(renderer.domElement)
     }
-  }, [graph, projection, cancelConnection, startConnection])
+  }, [graph, projection, cameraKey, cancelConnection, startConnection])
 
   useEffect(() => {
     if (!apiRef) return
