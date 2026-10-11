@@ -60,7 +60,7 @@ export function translateCircuit(circuit: QuantumCircuit): ZXGraph3D {
     }
     if (step.type === 'z' || step.type === 'x') {
       const id = `${gate.id}-c${column}-q${step.wire}-${step.type}`
-      place(id, step.type, phaseLabel(step.phase), step.wire, gate.id)
+      place(id, step.type, step.text ?? phaseLabel(step.phase), step.wire, gate.id)
       through(id, step.wire)
       return
     }
@@ -70,8 +70,8 @@ export function translateCircuit(circuit: QuantumCircuit): ZXGraph3D {
     const controlId = `${gate.id}-c${column}-q${step.control}-${controlColor}`
     const targetId = `${gate.id}-c${column}-q${step.target}-${targetColor}`
     place(controlId, controlColor, '0', step.control, gate.id)
-    through(controlId, step.control)
     place(targetId, targetColor, '0', step.target, gate.id)
+    through(controlId, step.control)
     through(targetId, step.target)
     connect(controlId, targetId, step.type === 'cz')
   }

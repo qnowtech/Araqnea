@@ -63,7 +63,9 @@ export const canInsertIntoCircuit = (node: ZXNode) => Boolean(node.custom && nod
 /** Maps a single palette generator to the equivalent circuit gate. */
 export function gateForSpider(node: ZXNode): { name: GateName; parameter?: string } | undefined {
   if (!canInsertIntoCircuit(node)) return undefined
-  return gateFromSpider(node.kind, node.phase)
+  const gate = gateFromSpider(node.kind, node.phase)
+  if (gate?.name === 'rz') return { name: 'p', parameter: gate.parameter }
+  return gate
 }
 
 /** Finds the qubit wire under a graph position, if the position lies on a wire's band. */

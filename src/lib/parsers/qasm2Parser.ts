@@ -1,8 +1,8 @@
 import type { CircuitGate, GateName, QuantumCircuit } from '../../types/circuit'
+import { evaluateAngle, parameterizedGates } from '../angles'
 
-const supported = new Set<GateName>(['h', 'x', 'y', 'z', 's', 't', 'rx', 'rz', 'cx', 'cz', 'swap', 'measure'])
-const singleQubitGates = new Set<GateName>(['h', 'x', 'y', 'z', 's', 't', 'rx', 'rz', 'measure'])
-const anglePattern = /^[+-]?(?:pi|tau|\d+(?:\.\d*)?|\.\d+)(?:\s*(?:[*/]\s*(?:pi|tau|\d+(?:\.\d*)?|\.\d+)|[+-]\s*(?:pi|tau|\d+(?:\.\d*)?|\.\d+)))*$/i
+const supported = new Set<GateName>(['h', 'x', 'y', 'z', 's', 't', 'rx', 'ry', 'rz', 'p', 'cx', 'cz', 'swap', 'measure'])
+const singleQubitGates = new Set<GateName>(['h', 'x', 'y', 'z', 's', 't', 'rx', 'ry', 'rz', 'p', 'measure'])
 
 export function parseQasm(source: string): { circuit?: QuantumCircuit; error?: string } {
   const statements = source
@@ -48,15 +48,16 @@ export function parseQasm(source: string): { circuit?: QuantumCircuit; error?: s
       continue
     }
 
-    const match = statement.match(/^([a-z]+)(?:\(([^()]*)\))?\s+(.+)$/i)
+    const match = statement.match(/^([a-z][a-z0-9]*)(?:\(([^()]*)\))?\s+(.+)$/i)
     if (!match) return { error: `Cannot parse “${statement}”` }
-    const name = match[1].toLowerCase() as GateName
+    const rawName = match[1].toLowerCase()
+    const name = (rawName === 'u1' ? 'p' : rawName) as GateName
     if (!supported.has(name) || name === 'measure') return { error: `Unsupported gate “${match[1]}”` }
-    const parameter = match[2]?.trim()
-    if ((name === 'rx' || name === 'rz') && (!parameter || !anglePattern.test(parameter))) {
+    const parameter = match[2]?.replaceAll('π', 'pi').trim().toLowerCase()
+    if (parameterizedGates.has(name) && (!parameter || evaluateAngle(parameter) === undefined)) {
       return { error: `Invalid angle in “${statement}”` }
     }
-    if (name !== 'rx' && name !== 'rz' && parameter) return { error: `Gate “${name}” does not take a parameter.` }
+    if (!parameterizedGates.has(name) && match[2] !== undefined) return { error: `Gate “${name}” does not take a parameter.` }
 
     const qubitRefs = [...match[3].matchAll(/([a-z_]\w*)\[(\d+)]/gi)]
     const expectedQubits = singleQubitGates.has(name) ? 1 : 2

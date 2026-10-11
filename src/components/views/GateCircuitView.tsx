@@ -1,4 +1,6 @@
-import type { CSSProperties } from 'react'
+import { useState, type CSSProperties } from 'react'
+import { PhaseEditor } from '../PhaseEditor'
+import { editableGateAngle } from '../../lib/angles'
 import { gateInfo, gateTip } from '../../data/gateInfo'
 import type { CircuitGate, GateName, QuantumCircuit } from '../../types/circuit'
 
@@ -6,6 +8,7 @@ const palette: { name: GateName; label: string }[] = [
   { name: 'h', label: 'H' }, { name: 'x', label: 'X' }, { name: 'y', label: 'Y' },
   { name: 'z', label: 'Z' }, { name: 's', label: 'S' }, { name: 't', label: 'T' },
   { name: 'rx', label: 'Rx(π/2)' }, { name: 'rz', label: 'Rz(π/2)' },
+  { name: 'ry', label: 'Ry(π/2)' }, { name: 'p', label: 'Ph(π/2)' },
   { name: 'cx', label: 'CNOT' }, { name: 'cz', label: 'CZ' }, { name: 'swap', label: 'SWAP' },
   { name: 'measure', label: 'Measure' },
 ]
@@ -18,9 +21,13 @@ interface GateCircuitViewProps {
   circuit: QuantumCircuit
   onAdd: (gate: GateName, wire: number) => void
   onRemove: (gateId: string) => void
+  onPhase: (gateId: string, parameter: string) => string | undefined
 }
 
-export function GateCircuitView({ circuit, onAdd, onRemove }: GateCircuitViewProps) {
+export function GateCircuitView({ circuit, onAdd, onRemove, onPhase }: GateCircuitViewProps) {
+  const [selectedId, setSelectedId] = useState('')
+  const selectedGate = circuit.gates.find((gate) => gate.id === selectedId)
+  const angle = selectedGate && editableGateAngle(selectedGate)
   const trackWidth = Math.max(600, circuit.gates.length * columnWidth + columnOffset * 2)
   return (
     <section className="mode-content gate-view">
@@ -33,7 +40,7 @@ export function GateCircuitView({ circuit, onAdd, onRemove }: GateCircuitViewPro
           data-tip={`${gateTip(gate.name)}\nClick to add on q[0] or drag onto a qubit wire.`}
           aria-label={`Add ${gateInfo[gate.name].title}`}
           onDragStart={(event) => event.dataTransfer.setData('text/plain', gate.name)}
-          onClick={() => onAdd(gate.name, 0)}
+          onClick={() => { setSelectedId(''); onAdd(gate.name, 0) }}
         >{gate.label}</button>)}
       </div>
       <div className="circuit-grid" style={{ '--wire-count': circuit.qubits, '--track-width': `${trackWidth}px` } as CSSProperties}>
@@ -41,44 +48,53 @@ export function GateCircuitView({ circuit, onAdd, onRemove }: GateCircuitViewPro
           <div className="circuit-row" key={wire} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
             event.preventDefault()
             const gate = event.dataTransfer.getData('text/plain') as GateName
-            if (palette.some((item) => item.name === gate)) onAdd(gate, wire)
+            if (palette.some((item) => item.name === gate)) { setSelectedId(''); onAdd(gate, wire) }
           }}>
             <span className="wire-label">q[{wire}]</span>
             <div className="wire-track">
               {circuit.gates.map((gate, column) => gate.qubits.includes(wire) && (
-                <GateBlock key={gate.id} gate={gate} wire={wire} column={column} onRemove={onRemove} />
+                <GateBlock key={gate.id} gate={gate} wire={wire} column={column} onRemove={(id) => { setSelectedId(''); onRemove(id) }} onSelect={setSelectedId} selected={gate.id === selectedId} />
               ))}
             </div>
           </div>
         ))}
         {circuit.classicalBits > 0 && <div className="circuit-row classical-row"><span className="wire-label">c</span><div className="wire-track" /></div>}
       </div>
-      <p className="editor-hint">Click a palette gate to add it, or drag it onto a qubit wire. Hover a gate to learn what it does, then use its × to remove it.</p>
+      {selectedGate && angle && <PhaseEditor key={selectedGate.id} parameter={angle.parameter} target={`Applies to ${angle.name === 'p' ? 'Ph' : angle.name.toUpperCase()} on q[${selectedGate.qubits[0]}]${selectedGate.name !== angle.name ? ` (replaces fixed ${selectedGate.name.toUpperCase()})` : ''}`} onApply={(parameter) => onPhase(selectedGate.id, parameter)} />}
+      <p className="editor-hint">Click a palette gate to add it, or drag it onto a qubit wire. Click a circuit X, Y, Z, S, T, Rx, Ry, Rz or Ph gate (or press Enter on it) to edit its angle. Use × to remove a gate.</p>
     </section>
   )
 }
 
-function GateBlock({ gate, wire, column, onRemove }: { gate: CircuitGate; wire: number; column: number; onRemove: (id: string) => void }) {
+function GateBlock({ gate, wire, column, onRemove, onSelect, selected }: { gate: CircuitGate; wire: number; column: number; onRemove: (id: string) => void; onSelect: (id: string) => void; selected: boolean }) {
   const multi = gate.qubits.length > 1
   const isControl = multi && gate.qubits[0] === wire
   const symbol = gate.name === 'cx' ? (isControl ? '●' : '⊕')
     : gate.name === 'cz' ? '●'
       : gate.name === 'swap' ? '×'
-        : ({ h: 'H', x: 'X', y: 'Y', z: 'Z', s: 'S', t: 'T', rx: 'Rx', rz: 'Rz', measure: 'M' } as Record<string, string>)[gate.name]
+        : ({ h: 'H', x: 'X', y: 'Y', z: 'Z', s: 'S', t: 'T', rx: 'Rx', ry: 'Ry', rz: 'Rz', p: 'Ph', measure: 'M' } as Record<string, string>)[gate.name]
   const top = Math.min(...gate.qubits)
   const span = Math.max(...gate.qubits) - top
   const role = multi ? (gate.name === 'cx' ? (isControl ? ' · control' : ' · target') : '') : ''
   return (
     <div
-      className={`gate-block gate-${gate.name}${multi ? ' multi' : ''}${gate.name === 'cx' && !isControl ? ' target' : ''}`}
+      className={`gate-block gate-${gate.name}${multi ? ' multi' : ''}${gate.name === 'cx' && !isControl ? ' target' : ''}${selected ? ' selected' : ''}`}
       style={{ left: `${column * columnWidth + columnOffset}px` }}
       data-tip={`${gateTip(gate.name)}\nOn ${gate.qubits.map((item) => `q[${item}]`).join(', ')}${role}${gate.parameter ? ` · θ = ${gate.parameter}` : ''}${gate.name === 'measure' ? ` → c[${gate.classicalBit ?? wire}]` : ''}`}
       tabIndex={0}
+      aria-label={`${gate.name} gate on q[${wire}]${editableGateAngle(gate) ? ' · edit angle' : ''}`}
+      onClick={() => onSelect(gate.id)}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault()
+          onSelect(gate.id)
+        }
+      }}
     >
       {multi && wire === top && span > 0 && <span className="gate-connector" style={{ height: `${span * rowHeight - 28}px` }} aria-hidden="true" />}
       {symbol}
       {gate.parameter && <small>{gate.parameter}</small>}
-      <button type="button" aria-label={`Remove ${gate.name} gate`} onClick={() => onRemove(gate.id)}>×</button>
+      <button type="button" aria-label={`Remove ${gate.name} gate`} onClick={(event) => { event.stopPropagation(); onRemove(gate.id) }}>×</button>
     </div>
   )
 }

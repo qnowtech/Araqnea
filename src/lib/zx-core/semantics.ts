@@ -595,7 +595,7 @@ export const palette: PaletteEntry[] = [
 export const paletteEntry = (id: PictureElementId) => palette.find((entry) => entry.id === id)
 
 export type DrawStep =
-  | { type: 'z' | 'x'; wire: number; phase: Phase }
+  | { type: 'z' | 'x'; wire: number; phase: Phase; text?: string }
   | { type: 'h'; wire: number }
   | { type: 'cnot'; control: number; target: number }
   | { type: 'cz'; control: number; target: number }
@@ -635,6 +635,14 @@ export function drawingOf(gate: CircuitGate): GateDrawing {
       return withScalars([{ type: 'z', wire, phase: phaseOf(gate.parameter) }])
     case 'rx':
       return withScalars([{ type: 'x', wire, phase: phaseOf(gate.parameter) }])
+    case 'ry':
+      return withScalars([
+        { type: 'z', wire, phase: phaseOf('-pi/2'), text: '-π/2' },
+        { type: 'x', wire, phase: phaseOf(gate.parameter), text: gate.parameter ?? '0' },
+        { type: 'z', wire, phase: phaseOf('pi/2'), text: 'π/2' },
+      ])
+    case 'p':
+      return withScalars([{ type: 'z', wire, phase: phaseOf(gate.parameter), text: gate.parameter }])
     case 'y':
       return withScalars([{ type: 'x', wire, phase: PI }, { type: 'z', wire, phase: PI }], [NEG_I])
     case 'cx':
@@ -689,8 +697,12 @@ export function gateZxText(name: GateName): string {
       return 'Z spider with phase π/4.'
     case 'rx':
       return 'X spider with phase θ.'
+    case 'ry':
+      return 'Z(−π/2), then an X spider of phase θ, then Z(π/2). The two Z phases are the basis change; θ lives on the X spider.'
     case 'rz':
       return 'Z spider with phase θ.'
+    case 'p':
+      return 'Z spider with phase θ. The same spider as rz; the global phase that separates Ph from Rz is not stored.'
     case 'cx':
       return 'Z spider on the control wired to an X spider on the target, both of phase 0, with the scalar √2.'
     case 'cz':

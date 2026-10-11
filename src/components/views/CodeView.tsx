@@ -1,14 +1,11 @@
-import { examples } from '../../data/examples'
-
 interface CodeViewProps {
   source: string
   error?: string
   qubits: number
   onChange: (value: string) => void
-  onPreset: (source: string) => void
 }
 
-export function CodeView({ source, error, qubits, onChange, onPreset }: CodeViewProps) {
+export function CodeView({ source, error, qubits, onChange }: CodeViewProps) {
   const lineCount = source.split('\n').length
   return (
     <section className="mode-content code-view">
@@ -17,15 +14,6 @@ export function CodeView({ source, error, qubits, onChange, onPreset }: CodeView
         <span className={`status ${error ? 'error' : ''}`}>{error ?? '● Valid circuit'}</span>
       </div>
       <div className="code-toolbar">
-        <label>Quick load
-          <select defaultValue="" onChange={(event) => {
-            if (event.target.value) onPreset(examples[event.target.value as keyof typeof examples])
-            event.target.value = ''
-          }}>
-            <option value="" disabled>Select an example…</option>
-            {Object.keys(examples).map((name) => <option value={name} key={name}>{name}</option>)}
-          </select>
-        </label>
         <span>{qubits} qubits</span>
       </div>
       <div className="code-editor">
@@ -38,7 +26,7 @@ export function CodeView({ source, error, qubits, onChange, onPreset }: CodeView
           wrap="off"
         />
       </div>
-      <p className="editor-hint">Changes are parsed live and synchronized with the gate and 3D spider workbenches.</p>
+      <p className="editor-hint">Changes are parsed live and synchronized with gates and Spiders. OpenQASM angles use radians (e.g. pi/2 = 90°). Ph is written as u1 in OpenQASM 2.</p>
     </section>
   )
 }
