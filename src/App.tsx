@@ -13,7 +13,7 @@ import { Spider3DCanvasView, type SpiderCanvasApi } from './components/views/Spi
 import { SpiderPalette } from './components/views/SpiderPalette'
 import { RunReport } from './components/views/RunCharts'
 import { toPennyLane, toQasm, toQasm3, toQiskitPython, toZXJson } from './lib/exporters/circuitExporters'
-import { toQollabCss, toQollabHtml, toQollabJs } from './lib/exporters/qollabExporter'
+import { getQollabBackend, qollabBackendName, runWithQollabBackend, toQollabBundle } from './lib/exporters/qollabExporter'
 import { parseQasm } from './lib/parsers/qasm2Parser'
 import { createCircuit, defaultTitle, loadLibrary, saveLibrary, uniqueTitle, type SavedCircuit } from './lib/storage/circuitLibrary'
 import { canInsertIntoCircuit, insertSpiderGate, nearestWire, wireAt } from './lib/sync/circuitSync'
@@ -74,6 +74,7 @@ function App() {
   const [notice, setNotice] = useState('')
   const [token, setToken] = useState('')
   const [execution, setExecution] = useState<RunResult | null>(null)
+  const [qollabBusy, setQollabBusy] = useState(false)
   const noticeTimer = useRef(0)
   const addedCounter = useRef(0)
   const canvasApi = useRef<SpiderCanvasApi>(null)
@@ -135,6 +136,8 @@ function App() {
   }), [graph])
   const [ranFor, setRanFor] = useState<string | null>(null)
   const shownRun = execution && ranFor === diagramKey ? execution : null
+  // The backend currently picked in Qollab's Select QPU dialog (undefined off Qollab).
+  const qollabSelectedBackend = useMemo(() => qollabBackendName(getQollabBackend()), [])
 
   const updateSource = (value: string) => {
     updateActive((circuit) => {
@@ -360,9 +363,7 @@ function App() {
     qiskit: [{ name: `${slug(title)}_qiskit.py`, text: toQiskitPython(result.circuit), type: 'text/x-python' }],
     pennylane: [{ name: `${slug(title)}_pennylane.py`, text: toPennyLane(result.circuit), type: 'text/x-python' }],
     qollab: [
-      { name: 'main.js', text: toQollabJs(result.circuit, graph, title), type: 'text/javascript' },
-      { name: 'index.html', text: toQollabHtml(title), type: 'text/html' },
-      { name: 'style.css', text: toQollabCss(), type: 'text/css' },
+      { name: 'index.html', text: toQollabBundle(result.circuit, graph, title), type: 'text/html' },
     ],
     zx: [{ name: `${slug(title)}.zx.json`, text: toZXJson(graph), type: 'application/json' }],
   })[exportFormat]
@@ -399,6 +400,46 @@ function App() {
       window.setTimeout(() => setCopied(false), 1600)
     } catch {
       setCopied(false)
+    }
+  }
+
+  // Runs the circuit on Qollab. The Qollab runtime injects a pre-created
+  // `backend` global holding the device picked in the Select QPU dialog
+  // (https://qollab.xyz/learn/docs/compute-backends); runWithQollabBackend
+  // builds the circuit with the Qiskit JS wrapper and submits to it. Outside
+  // Qollab there is no `backend`, so the button explains it must run there.
+  const runOnQollab = async () => {
+    if (!result.circuit) {
+      announce('Fix the QASM errors first — there is no circuit to run on Qollab.')
+      return
+    }
+    const backend = getQollabBackend()
+    if (!backend) {
+      announce('Run on Qollab works on qollab.xyz — open Araqnea there to run on its backends.')
+      return
+    }
+    setQollabBusy(true)
+    announce('Running on the backend selected in Qollab’s Select QPU dialog…')
+    try {
+      const { counts, backendName } = await runWithQollabBackend(result.circuit, backend)
+      console.log(JSON.stringify(counts)) // a JS project's console.log reaches the Qollab run console (objects print as [object Object])
+      setRanFor(diagramKey)
+      setExecution({ ok: true, mode: 'hardware', counts, qasm: toQasm(result.circuit), ...(backendName ? { backendName } : {}) })
+      announce(`Qollab run finished on ${backendName ?? 'the selected backend'} — counts are in the overview panel and the Qollab console.`)
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error)
+      // IonQ remote simulators/QPUs POST to IonQ's cloud, which Qollab's sandbox
+      // blocks from project code ("Failed to fetch"). Translate that traceback
+      // into the actionable fix: choose a local simulator in the Select QPU dialog.
+      const isRemoteBackend = /qiskit_ionq|ionq|Failed to fetch|ConnectionError/i.test(raw)
+      const message = isRemoteBackend
+        ? 'The selected QPU is a remote IonQ backend, which Qollab blocks from project code. In Qollab’s Select QPU dialog pick a local simulator instead — the built-in simulator (Ideal) is free and instant.'
+        : `Qollab run failed: ${raw}`
+      setRanFor(diagramKey)
+      setExecution({ ok: false, error: message })
+      announce(message)
+    } finally {
+      setQollabBusy(false)
     }
   }
 
@@ -440,6 +481,7 @@ function App() {
         <a className="brand" data-tour="brand" href="/" aria-label="Araqnea home"><span className="brand-mark">⌬</span><span>Araqnea</span><small>Powered by Qnow</small></a>
         <nav data-tour="navbar">
           <span className="header-status"><i /> LIVE SYNC</span>
+          <button type="button" className="run-qollab" disabled={qollabBusy} onClick={() => void runOnQollab()} data-tip={'Run on Qollab\nRuns the circuit on the backend picked in Qollab’s Select QPU dialog. Only works when Araqnea runs on qollab.xyz.'}>{qollabBusy ? 'Running…' : 'Run on Qollab'} <span aria-hidden="true">▶</span></button>
           <button type="button" onClick={startTour} data-tip={'Guided tour\nA short walkthrough of the workbench.'}>Tour <span aria-hidden="true">✦</span></button>
           <button type="button" onClick={() => setShowAbout(true)}>About</button>
           <button type="button" onClick={() => { setExportFileIndex(0); setShowExport(true) }} data-tip={'Export\nOpenQASM 2/3, Qiskit, PennyLane, a Qollab project (HTML, CSS, JS) or ZX JSON.'}>Export <span aria-hidden="true">↗</span></button>
@@ -560,6 +602,10 @@ function App() {
         <div className="run-panel">
           <button type="button" onClick={() => execute('simulator')} disabled={!result.circuit}>Simulator</button>
           <button type="button" onClick={() => execute('hardware')} disabled={!result.circuit}>Hardware</button>
+          <button type="button" className="run-qollab" onClick={() => void runOnQollab()} disabled={!result.circuit || qollabBusy} data-tip={'Run on Qollab\nRuns the circuit on the backend picked in Qollab’s Select QPU dialog. Only works when Araqnea runs on qollab.xyz.'}>
+            {qollabBusy ? 'Running…' : 'Run on Qollab'} <span aria-hidden="true">▶</span>
+          </button>
+          {qollabSelectedBackend && <span className="qollab-backend" title="Backend selected in Qollab’s Select QPU dialog">on <b>{qollabSelectedBackend}</b></span>}
           <label className="key-field">Key
             <input type="password" autoComplete="off" aria-label="Hardware key" value={token} onChange={(event) => setToken(event.target.value)} />
           </label>
@@ -608,6 +654,7 @@ function App() {
             <li><b>Spiders</b> — explore the ZX graph, drag picturalism elements in, double-click a symbol to see where it can join, box-select and move groups, and edit phases. The canvas opens flat.</li>
             <li><b>Circuits</b> — rename, create and switch between circuits saved in your browser.</li>
             <li><b>Export</b> — OpenQASM 2.0/3.0, Qiskit, PennyLane, a Qollab project (index.html, style.css, main.js), or 3D ZX JSON.</li>
+            <li><b>Run on Qollab</b> — download the circuit as a runnable Qollab project zip and upload it on qollab.xyz to execute it on free simulators or IonQ hardware.</li>
           </ul>
           <p className="about-meta">Built by Qnow Technologies · Released under the MIT License.</p>
           <div className="export-actions"><button type="button" onClick={startTour}>Take the guided tour</button><button className="copy" type="button" onClick={() => setShowAbout(false)}>Close</button></div>
